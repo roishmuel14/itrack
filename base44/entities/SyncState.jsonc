@@ -1,0 +1,21 @@
+// Global singleton (key = "gmail_sweep") holding the inbox sweep cursor.
+// Admin/service only; the frontend never touches it.
+{
+  "name": "SyncState",
+  "type": "object",
+  "title": "Sync State",
+  "description": "Global cursor state for the Gmail sweep cron",
+  "properties": {
+    "key":             { "type": "string", "description": "gmail_sweep (unique)" },
+    "last_history_id": { "type": "string", "description": "Gmail history cursor" },
+    "last_message_ts": { "type": "string", "format": "date-time", "description": "Fallback cursor" },
+    "last_run_at":     { "type": "string", "format": "date-time", "description": "Monitoring" }
+  },
+  "required": ["key"],
+  "rls": {
+    "create": { "user_condition": { "role": "admin" } },
+    "read": { "user_condition": { "role": "admin" } },
+    "update": { "user_condition": { "role": "admin" } },
+    "delete": { "user_condition": { "role": "admin" } }
+  }
+}

@@ -1,0 +1,34 @@
+// One physical shipment of an Order (split orders have several). Carries its own
+// carrier, tracking number, and status; Order.status = max(shipment statuses).
+{
+  "name": "Shipment",
+  "type": "object",
+  "title": "Shipment",
+  "description": "One physical shipment belonging to an Order",
+  "properties": {
+    "owner_email":     { "type": "string", "format": "email", "description": "App user who owns this shipment" },
+    "order_id":        { "type": "string", "description": "Parent Order id" },
+    "carrier":         { "type": "string", "description": "Detected or extracted carrier name" },
+    "tracking_number": { "type": "string", "description": "Merge key" },
+    "tracking_url":    { "type": "string", "description": "Deep link to the carrier tracking page, generated" },
+    "eta_date":        { "type": "string", "format": "date" },
+    "status": {
+      "type": "string",
+      "enum": ["ordered", "shipped", "in_transit", "out_for_delivery", "delivered", "delayed", "cancelled", "returned"],
+      "default": "ordered",
+      "description": "Shipment-level status; same values and monotonic rules as Order"
+    }
+  },
+  "required": ["owner_email", "order_id"],
+  "rls": {
+    "create": { "user_condition": { "role": "admin" } },
+    "read": {
+      "$or": [
+        { "data.owner_email": "{{user.email}}" },
+        { "user_condition": { "role": "admin" } }
+      ]
+    },
+    "update": { "user_condition": { "role": "admin" } },
+    "delete": { "user_condition": { "role": "admin" } }
+  }
+}

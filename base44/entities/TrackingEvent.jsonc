@@ -1,0 +1,38 @@
+// One event on an order's timeline, with provenance back to the email it came from.
+{
+  "name": "TrackingEvent",
+  "type": "object",
+  "title": "Tracking Event",
+  "description": "One event on an order's timeline",
+  "properties": {
+    "owner_email":     { "type": "string", "format": "email", "description": "App user who owns this event" },
+    "order_id":        { "type": "string", "description": "Parent Order id" },
+    "shipment_id":     { "type": "string", "description": "Optional parent Shipment id" },
+    "type": {
+      "type": "string",
+      "enum": ["order_confirmation", "shipment", "transit_update", "out_for_delivery", "delivered", "delay", "seller_message", "refund_update", "manual", "other"],
+      "description": "What kind of event this is"
+    },
+    "occurred_at":     { "type": "string", "format": "date-time", "description": "Email date or carrier timestamp" },
+    "title":           { "type": "string", "description": "e.g. Shipped via UPS" },
+    "description":     { "type": "string", "maxLength": 1000 },
+    "source": {
+      "type": "string",
+      "enum": ["gmail", "manual", "system"],
+      "default": "gmail"
+    },
+    "email_record_id": { "type": "string", "description": "Provenance link to the source EmailRecord" }
+  },
+  "required": ["owner_email", "order_id", "type", "occurred_at"],
+  "rls": {
+    "create": { "user_condition": { "role": "admin" } },
+    "read": {
+      "$or": [
+        { "data.owner_email": "{{user.email}}" },
+        { "user_condition": { "role": "admin" } }
+      ]
+    },
+    "update": { "user_condition": { "role": "admin" } },
+    "delete": { "user_condition": { "role": "admin" } }
+  }
+}

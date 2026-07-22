@@ -1,0 +1,54 @@
+// A purchase aggregated from one or more emails. Reference RLS pattern for all
+// per-user entities: writes are admin/service-role only (functions bypass RLS via
+// asServiceRole); reads are owner (data.owner_email) or admin.
+{
+  "name": "Order",
+  "type": "object",
+  "title": "Order",
+  "description": "A purchase aggregated from one or more emails",
+  "properties": {
+    "owner_email":     { "type": "string", "format": "email", "description": "App user who owns this order" },
+    "merchant_name":   { "type": "string", "minLength": 1 },
+    "merchant_domain": { "type": "string", "description": "e.g. amazon.com; merge key part" },
+    "logo_url":        { "type": "string", "description": "Re-hosted merchant logo" },
+    "order_number":    { "type": "string", "description": "Merchant order id; merge key part" },
+    "ordered_at":      { "type": "string", "format": "date-time" },
+    "currency":        { "type": "string", "default": "USD" },
+    "total":           { "type": "number" },
+    "status": {
+      "type": "string",
+      "enum": ["ordered", "shipped", "in_transit", "out_for_delivery", "delivered", "delayed", "cancelled", "returned"],
+      "default": "ordered",
+      "description": "Monotonic rank 0-4; delayed annotates; cancelled/returned terminal"
+    },
+    "promised_date":   { "type": "string", "format": "date", "description": "Merchant-promised delivery date" },
+    "eta_date":        { "type": "string", "format": "date", "description": "Latest carrier/merchant ETA" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name":      { "type": "string" },
+          "qty":       { "type": "integer", "default": 1 },
+          "price":     { "type": "number" },
+          "image_url": { "type": "string", "description": "Re-hosted via UploadFile" }
+        }
+      }
+    },
+    "confidence":     { "type": "number", "description": "0-1 from extraction; <0.6 shows a badge" },
+    "last_event_at":  { "type": "string", "format": "date-time" },
+    "is_archived":    { "type": "boolean", "default": false }
+  },
+  "required": ["owner_email", "merchant_name", "status"],
+  "rls": {
+    "create": { "user_condition": { "role": "admin" } },
+    "read": {
+      "$or": [
+        { "data.owner_email": "{{user.email}}" },
+        { "user_condition": { "role": "admin" } }
+      ]
+    },
+    "update": { "user_condition": { "role": "admin" } },
+    "delete": { "user_condition": { "role": "admin" } }
+  }
+}

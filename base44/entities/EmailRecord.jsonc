@@ -1,0 +1,36 @@
+// One processed inbound email; the idempotency key and audit trail of the ingest
+// pipeline. Unroutable/quarantined records carry no owner_email, so only admin
+// ever reads them.
+{
+  "name": "EmailRecord",
+  "type": "object",
+  "title": "Email Record",
+  "description": "One processed inbound email; idempotency key and audit trail",
+  "properties": {
+    "owner_email":      { "type": "string", "format": "email", "description": "Empty when unroutable" },
+    "gmail_message_id": { "type": "string", "minLength": 1, "description": "IDEMPOTENCY KEY: skip if already recorded" },
+    "thread_id":        { "type": "string" },
+    "from_address":     { "type": "string" },
+    "subject":          { "type": "string", "maxLength": 500 },
+    "received_at":      { "type": "string", "format": "date-time" },
+    "alias_token":      { "type": "string", "description": "Token extracted from Delivered-To, if any" },
+    "classification":   { "type": "string", "enum": ["order_confirmation", "shipping_update", "delivery", "delay", "seller_message", "refund_update", "other_order_related", "irrelevant"] },
+    "parse_status":     { "type": "string", "enum": ["pending", "parsed", "low_confidence", "irrelevant", "unroutable", "failed"], "default": "pending" },
+    "confidence":       { "type": "number" },
+    "snippet":          { "type": "string", "maxLength": 2000, "description": "Plain-text excerpt; NEVER the full body" },
+    "order_id":         { "type": "string", "description": "Order this email merged into, if any" },
+    "error":            { "type": "string", "description": "Set when parse_status=failed" }
+  },
+  "required": ["gmail_message_id", "parse_status"],
+  "rls": {
+    "create": { "user_condition": { "role": "admin" } },
+    "read": {
+      "$or": [
+        { "data.owner_email": "{{user.email}}" },
+        { "user_condition": { "role": "admin" } }
+      ]
+    },
+    "update": { "user_condition": { "role": "admin" } },
+    "delete": { "user_condition": { "role": "admin" } }
+  }
+}

@@ -91,18 +91,23 @@ no `.app.jsonc`; `base44 dev` runs functions locally (deno present).
 All schemas up front (schema churn after screens exist is the most expensive change), the write
 pattern proven once, RLS verified with two accounts.
 
-- [ ] Write all 8 entity JSONCs from PRD section 5 (Order and EmailRecord verbatim; rest from the
-      field tables, RLS = the Order pattern).
-- [ ] `base44 entities push`; diff the dashboard Data section against the files.
-- [ ] `base44 types generate`.
-- [ ] Seed RefundPolicy (6 policies from PRD F5) via `scripts/seed-policies.ts` + `base44 exec`.
-- [ ] Prove the mutation pattern on the simplest function: `account/bootstrap` (auth -> owner
-      check -> asServiceRole write with `owner_email` -> error contract). `base44 functions deploy`,
-      verify via curl (anonymous gets 401 JSON, authenticated via `base44 exec` invoke gets settings
-      with a unique alias).
-- [ ] Create a second test account (invite or register). Write `scripts/leak-test.ts`: as user B,
-      list every per-user entity and assert zero of user A's rows; also `subscribe()` as B while A
-      changes -> assert no events (PRD risk #2).
+- [x] All 8 entity JSONCs written (Order + EmailRecord verbatim from PRD; rest from field tables).
+- [x] `base44 entities push`: all 8 created, sample Task deleted; remote schemas diffed via
+      list_entity_schemas, match 1:1 including RLS blocks.
+- [x] `base44 types generate` -> base44/.types/types.d.ts.
+- [x] RefundPolicy seeded: {created:6, total:6} via scripts/seed-policies.ts + base44 exec
+      (idempotent upsert by policy_key, re-runnable).
+- [x] Mutation pattern proven on `account/bootstrap` (deployed): anonymous curl -> 401
+      `{error, reasons:[{code:"auth_required",...}]}`; authenticated exec invoke -> settings with
+      alias `3e0axvd4`, owner_email stamped server-side; second invoke -> `created:false` (idempotent);
+      bootstrap-race self-heal included. Anonymous REST reads on per-user entities return `[]`
+      (RLS filters, doesn't 401); RefundPolicy public read serves 6 rows.
+- [ ] Two-account leak test: scripts/leak-test.mjs (reads + realtime, exit-coded) +
+      scripts/leak-test-trigger.ts are WRITTEN and ready. **BLOCKED on Roi: register test account
+      B on the live app, put its credentials in gitignored scripts/.env.leaktest
+      (ITRACK_TEST_B_EMAIL / ITRACK_TEST_B_PASSWORD), then run:
+      `node --env-file=scripts/.env.leaktest scripts/leak-test.mjs` + the trigger. (Claude cannot
+      create accounts.)**
 
 **DoD:** schemas live and matching the repo; policies seeded; bootstrap returns unique aliases for
 two accounts; **leak test passes for reads AND realtime**; anonymous function call gets a clean 401.

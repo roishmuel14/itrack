@@ -1,0 +1,38 @@
+// A detected chance to get money back for a late order. Unique per
+// order_id + policy_key (enforced by refunds/scan upsert, skip dismissed).
+{
+  "name": "RefundOpportunity",
+  "type": "object",
+  "title": "Refund Opportunity",
+  "description": "A detected chance to claim money back on a late order",
+  "properties": {
+    "owner_email":     { "type": "string", "format": "email", "description": "App user who owns this opportunity" },
+    "order_id":        { "type": "string", "description": "Order this applies to; unique with policy_key" },
+    "policy_key":      { "type": "string", "description": "e.g. temu_on_time" },
+    "type": {
+      "type": "string",
+      "enum": ["late_delivery", "buyer_protection", "chargeback_window"]
+    },
+    "amount_estimate": { "type": "number", "description": "May be absent for credit-type policies" },
+    "deadline":        { "type": "string", "format": "date", "description": "Claim-by date" },
+    "status": {
+      "type": "string",
+      "enum": ["detected", "notified", "dismissed", "claimed", "recovered"],
+      "default": "detected"
+    },
+    "draft_message":   { "type": "string", "maxLength": 2000, "description": "AI-drafted claim" },
+    "claim_url":       { "type": "string", "description": "From policy" }
+  },
+  "required": ["owner_email", "order_id", "policy_key"],
+  "rls": {
+    "create": { "user_condition": { "role": "admin" } },
+    "read": {
+      "$or": [
+        { "data.owner_email": "{{user.email}}" },
+        { "user_condition": { "role": "admin" } }
+      ]
+    },
+    "update": { "user_condition": { "role": "admin" } },
+    "delete": { "user_condition": { "role": "admin" } }
+  }
+}
