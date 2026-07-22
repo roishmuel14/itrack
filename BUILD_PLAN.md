@@ -118,9 +118,15 @@ two accounts; **leak test passes for reads AND realtime**; anonymous function ca
 
 The scariest assumption gets verified before anything is built on it.
 
-- [ ] `base44/connectors/gmail.jsonc` with readonly scope; `base44 connectors push`; Roi authorizes
-      with the iTrack Gmail account in the browser. If readonly-only is rejected, accept the full
-      scope set and log to FEEDBACK.md (PRD risk #4).
+- [~] `base44/connectors/gmail.jsonc` with readonly scope written; `base44 connectors push` done
+      2026-07-22 -> connector PENDING authorization (connectionId base44_6a611a5655287dedb0f0b9be).
+      **ROI MANUAL: create the iTrack Gmail account, then open
+      https://app.base44.com/api/external-auth/connect/4ae30b6b9241480e8837a42fd10aae05
+      in a browser and authorize while logged into THAT account. If the link has expired, rerun
+      `base44 connectors push` for a fresh one.** If readonly-only is rejected, accept the full
+      scope set and log to FEEDBACK.md (PRD risk #4). NOTE (logged in FEEDBACK.md): functions with
+      a connector automation cannot deploy until the connector is authorized, so after authorizing
+      rerun `base44 functions deploy`.
 - [ ] Minimal `inbox/onNewMail` that logs the FULL automation payload + fetches the new message's
       headers via `getConnection("gmail")` and logs `Delivered-To` / `X-Forwarded-To` / `To`.
       `function.jsonc` with the connector automation + `has_new_messages` condition (PRD section 6).

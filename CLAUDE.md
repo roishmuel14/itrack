@@ -14,8 +14,14 @@ Build-Off entry; **submission deadline July 28, 2026**. English-only UI, single-
 
 1. **Base44 developer platform via CLI only.** Never use the no-code builder MCP tools
    (`create_base44_app`, `edit_base44_app`, `create_entities`, `update_entity_schema`) on this
-   app: different product. Schemas are `base44/entities/*.jsonc` + `base44 entities push`;
-   functions deploy with `base44 functions deploy`; data scripts run via `base44 exec`.
+   app for code, schemas, or data: different product. Schemas are `base44/entities/*.jsonc` +
+   `base44 entities push`; functions deploy with `base44 functions deploy`; data scripts run via
+   `base44 exec`. **Sole exception (forced 2026-07-22): Workflows.** This app generation has
+   legacy `function.jsonc` automations DISABLED (409 workflows_enabled), and workflows' only
+   write path is a builder prompt; so scheduling/connector triggers are created via a tightly
+   scoped `edit_base44_app` prompt that names the function, trigger, schedule, and args, and
+   NOTHING else. Never keep `automations` arrays in function.jsonc, and prefer no function.jsonc
+   at all (its presence also breaks `base44/shared/` imports at deploy; see FEEDBACK.md).
 2. **Deploy after every change.** Function changed -> `base44 functions deploy` (file presence
    registers nothing). Schema changed -> `entities push`. Frontend -> `npm run build` +
    `base44 deploy -y`. Automations never run under `base44 dev`; verify them on the live app via
