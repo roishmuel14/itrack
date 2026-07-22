@@ -1,4 +1,5 @@
-import { Mail } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Mail, Wand2 } from 'lucide-react';
 import { useAuth } from '@/api/auth';
 import CopyButton from '@/components/CopyButton';
 
@@ -25,6 +26,9 @@ export default function Settings() {
           ) : (
             <div className="h-8 bg-muted rounded-lg animate-pulse" />
           )}
+          <Link to="/onboarding" className="inline-flex items-center gap-1.5 text-sm text-primary font-medium mt-3">
+            <Wand2 className="w-4 h-4" /> Set up automatic forwarding
+          </Link>
         </div>
       </div>
     </div>

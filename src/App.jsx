@@ -4,6 +4,8 @@ import { ToastProvider } from '@/lib/toast';
 import AppShell from '@/components/layout/AppShell';
 import Login from '@/pages/Login';
 import Dashboard from '@/pages/Dashboard';
+import OrderDetail from '@/pages/OrderDetail';
+import Onboarding from '@/pages/Onboarding';
 import Refunds from '@/pages/Refunds';
 import Settings from '@/pages/Settings';
 
@@ -30,6 +32,8 @@ export default function App() {
           <Routes>
             <Route element={<Gate />}>
               <Route index element={<Dashboard />} />
+              <Route path="orders/:id" element={<OrderDetail />} />
+              <Route path="onboarding" element={<Onboarding />} />
               <Route path="refunds" element={<Refunds />} />
               <Route path="settings" element={<Settings />} />
               <Route path="login" element={<Navigate to="/" replace />} />

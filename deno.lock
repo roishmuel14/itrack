@@ -24,6 +24,7 @@
         "npm:lucide-react@0.475",
         "npm:postcss@^8.5.3",
         "npm:react-dom@^18.2.0",
+        "npm:react-router-dom@^7.18.1",
         "npm:react@^18.2.0",
         "npm:tailwindcss@^3.4.17",
         "npm:vite@^6.1.0"
