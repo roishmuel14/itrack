@@ -8,7 +8,8 @@ Competition deadline: **submit by July 28, 2026**. Day mapping at the bottom.
 
 ## Current status
 
-- [ ] Stage 0: Foundation (scaffold, git, deploy skeleton)
+- [x] Stage 0: Foundation (scaffold, git, deploy skeleton) - done 2026-07-22; Roi manual items
+      (enroll, iTrack Gmail account, Builder+ confirm) still pending, gate stage 2
 - [ ] Stage 1: Data layer (all schemas + RLS + seed + mutation pattern proven)
 - [ ] Stage 2: De-risk spike: Gmail connector + alias routing (GATE)
 - [ ] Stage 3: Ingestion pipeline (parse, merge, sweep, quarantine)
@@ -69,17 +70,16 @@ Scaffold, link, version control, and a deployed skeleton on day one.
 
 - [ ] Roi (manual, ~15 min): enroll at backendcompetition.base44.app/enroll; create the iTrack
       Gmail account (suggestion: `itrackapp44@gmail.com`, strong password, no 2FA blockers for
-      connector auth); confirm workspace plan is Builder+.
-- [ ] Prereqs: `node -v` (>= 20.19), `base44 whoami`, `deno --version` (install if missing:
-      `curl -fsSL https://deno.land/install.sh | sh`).
-- [ ] `base44 create iTrack --path . --template backend-and-client` from `/Users/roishmuel/Dev/iTrack`
-      (dir already contains the md docs; if create refuses a non-empty dir, scaffold into `./app`
-      and move contents up, keeping the md files).
-- [ ] `git init`, first commit of scaffold + docs; create private GitHub repo `itrack`; verify
-      `base44/.app.jsonc` is gitignored BEFORE the first push.
-- [ ] Record the app id + live URL in CLAUDE.md (Layout section).
-- [ ] `npm run build` && `base44 deploy -y`; `base44 visibility public`.
-- [ ] `base44 dev` boots; template page loads on localhost.
+      connector auth); confirm workspace plan is Builder+. **STILL PENDING as of 2026-07-22.**
+- [x] Prereqs: node v22.18.0, base44 CLI 0.1.5 (roishmuel14@gmail.com), deno 2.7.13.
+- [x] `base44 create iTrack --path . --template backend-and-client`: accepted the non-empty dir,
+      scaffolded in place. App id 6a6117b2e209abd12bdb7160.
+- [x] `git init`, first commit; private GitHub repo `roishmuel14/itrack`; `.app.jsonc` verified
+      gitignored before push (`.app.json*` pattern in template .gitignore).
+- [x] App id + live URL recorded in CLAUDE.md.
+- [x] `npm run build` && `base44 deploy -y` (visibility public came from config.jsonc; live URL
+      https://i-track-2bdb7160.base44.app serves HTTP 200 signed-out).
+- [x] `base44 dev` boots: backend on :4400 loads entities, vite on :5173.
 
 **DoD:** live `*.base44.app` URL serves the skeleton to a signed-out visitor; repo on GitHub with
 no `.app.jsonc`; `base44 dev` runs functions locally (deno present).
