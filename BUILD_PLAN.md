@@ -169,7 +169,12 @@ The backend centerpiece: email in, correct entities out, idempotent, quarantined
       shipment aggregation: pure, unit-testable), `carriers`, `rehost` (UploadFile), `responses`.
 - [ ] Full `inbox/onNewMail`: idempotency check (gmail_message_id), route, pipeline, EmailRecord
       statuses (parsed/low_confidence/irrelevant/unroutable/failed), quarantine path.
-- [ ] `inbox/sweep` + SyncState cursor; cron `*/15 * * * *`; deploy both.
+- [x] `inbox/sweep` + SyncState cursor deployed. Scheduling note: this app generation REJECTS
+      function.jsonc automations (409 workflows_enabled; FEEDBACK.md); the "Inbox sweep" WORKFLOW
+      (every 15 min) was created via a scoped builder prompt and VERIFIED FIRING in logs
+      (20:30:04 run hit the expected connector-not-connected error path). "Refund scan" (03:00
+      UTC) and "Daily digest" (07:00 UTC) workflows requested the same way; their functions'
+      manual-trigger paths are verified; confirm first scheduled runs in tomorrow's logs.
 - [ ] Test with 5 real merchant emails (Amazon, Temu, Revolve, AliExpress, local vendor): forward
       confirmation + shipping + delivery variants, including one out-of-order sequence and one
       Amazon-style split into two shipments. Verify via `scripts/verify-ingest.ts` (`base44 exec`).

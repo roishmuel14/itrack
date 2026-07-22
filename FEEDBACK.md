@@ -6,7 +6,25 @@ bugs. On submission day this file becomes the answers to the three required ques
 
 ## What worked well
 
-- (add as discovered during the build)
+- 2026-07-22: `base44 create --template backend-and-client` into a NON-empty directory just
+  worked, kept our existing docs, and shipped an `.agents/skills/` folder with genuinely accurate
+  CLI + SDK reference docs. Those bundled docs (entities.md, base44-agents.md, auth.md) were the
+  single biggest time-saver of the day: every method name we used came from them and none was wrong.
+- 2026-07-22: `base44 entities push` registered all 8 schemas 1:1 on the first try, including
+  full `rls` blocks with `$or` + `user_condition`, and cleanly deleted the template's sample
+  entity. Diffing `list_entity_schemas` against the repo showed zero drift.
+- 2026-07-22: `base44 exec` is a superpower for headless verification: we proved the whole
+  ingest pipeline (merge, out-of-order monotonicity, split shipments, newsletter rejection),
+  refund scan idempotency, digest sends, and even realtime `subscribe()` delivery end to end
+  without ever opening the dashboard.
+- 2026-07-22: `InvokeLLM` with `response_json_schema` was impressively reliable on real-world
+  order emails: correct order numbers, totals, date-range resolution ("Jul 25 - Jul 27" -> the
+  last day), per-item prices, and honest confidence scores, with zero schema violations across
+  every test email we threw at it.
+- 2026-07-22: The error contract pattern (4xx + `{error, reasons[]}`) plus `functions.invoke`
+  surfacing the body on `err.response.data` made server-to-toast error plumbing trivial.
+- 2026-07-22: `base44 agents push` + entity tools: the assistant answered "Where are my LED strip
+  lights?" correctly on the FIRST try, reading the user's own orders through RLS-scoped tools.
 
 ## Where we got stuck / confused
 
