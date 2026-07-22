@@ -10,13 +10,27 @@ Competition deadline: **submit by July 28, 2026**. Day mapping at the bottom.
 
 - [x] Stage 0: Foundation (scaffold, git, deploy skeleton) - done 2026-07-22; Roi manual items
       (enroll, iTrack Gmail account, Builder+ confirm) still pending, gate stage 2
-- [ ] Stage 1: Data layer (all schemas + RLS + seed + mutation pattern proven)
-- [ ] Stage 2: De-risk spike: Gmail connector + alias routing (GATE)
-- [ ] Stage 3: Ingestion pipeline (parse, merge, sweep, quarantine)
-- [ ] Stage 4: Frontend shell + shared kit
-- [ ] Stage 5: Dashboard + timeline + onboarding (MILESTONE 1: daily usable)
-- [ ] Stage 6: Refund radar + digest
-- [ ] Stage 7: Assistant agent + WhatsApp
+- [~] Stage 1: Data layer - ALL DONE except the two-account leak test (needs Roi: register
+      account B, fill scripts/.env.leaktest)
+- [~] Stage 2: Gmail connector spike - connector pushed, PENDING Roi: create the iTrack Gmail
+      account + authorize (fresh URL below), then rerun `base44 functions deploy` + send the
+      3 test emails
+- [~] Stage 3: Ingestion pipeline - pipeline + sweep + quarantine DEPLOYED and verified via
+      manualAdd on the live app (merge, out-of-order, split, newsletter, monotonicity all pass);
+      remaining: live gmail-path tests once the connector is authorized, sweep workflow run in logs
+- [x] Stage 4: Frontend shell + shared kit - deployed 2026-07-22 (tokens, auth+OTP+Google, api
+      wrappers with reasons-toasts, formatters, empty dashboard; login verified signed-out at
+      375px, error toast verified via DOM)
+- [~] Stage 5: Dashboard + timeline + onboarding - ALL UI deployed (stats, filters, cards with
+      progress+today marker, realtime subscriptions, detail+timeline+snippets, onboarding with
+      confirmForwarding assist, manual add, activity feed); remaining: authenticated click-through
+      + two-window realtime test (needs a browser session), narrow-viewport pass on inner screens
+- [~] Stage 6: Refund radar + digest - ALL functions + screens deployed; scan verified live
+      (AC1 exactly-one, AC2 no-dupes, AC3 dismiss holds, draft cites order number), digest send +
+      skip-when-off verified live; remaining: workflows for 03:00/07:00 crons, wipe leak-test rerun
+- [~] Stage 7: Assistant agent - itrack_assistant pushed with user-scoped memory; in-app chat
+      widget deployed; agent answered "Where are my LED strip lights?" correctly from entity tools
+      (headless test). Remaining: WhatsApp enable (Roi, dashboard), two-account isolation gate
 - [ ] Stage 8: Ship (MILESTONE 2: submitted)
 
 ## Architectural decisions (the chosen shape)
@@ -121,9 +135,11 @@ The scariest assumption gets verified before anything is built on it.
 - [~] `base44/connectors/gmail.jsonc` with readonly scope written; `base44 connectors push` done
       2026-07-22 -> connector PENDING authorization (connectionId base44_6a611a5655287dedb0f0b9be).
       **ROI MANUAL: create the iTrack Gmail account, then open
-      https://app.base44.com/api/external-auth/connect/4ae30b6b9241480e8837a42fd10aae05
+      https://app.base44.com/api/external-auth/connect/ef769588bf3949a391a883d22bca2eee
       in a browser and authorize while logged into THAT account. If the link has expired, rerun
-      `base44 connectors push` for a fresh one.** If readonly-only is rejected, accept the full
+      `base44 connectors push` for a fresh one. If the final account name differs from
+      itrackapp44@gmail.com, update INBOX_BASE in src/api/auth.jsx and set the secret:
+      `base44 secrets set ITRACK_INBOX_ADDRESS=<the-address>`.** If readonly-only is rejected, accept the full
       scope set and log to FEEDBACK.md (PRD risk #4). NOTE (logged in FEEDBACK.md): functions with
       a connector automation cannot deploy until the connector is authorized, so after authorizing
       rerun `base44 functions deploy`.

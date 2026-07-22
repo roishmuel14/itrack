@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Package, ReceiptText, Settings, LogOut } from 'lucide-react';
 import { useAuth } from '@/api/auth';
+import AssistantChat from '@/components/AssistantChat';
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: Package, end: true },
@@ -65,6 +66,7 @@ export default function AppShell() {
       <main className="flex-1 w-full max-w-6xl mx-auto px-4 py-6">
         <Outlet />
       </main>
+      <AssistantChat />
     </div>
   );
 }
