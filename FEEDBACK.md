@@ -71,6 +71,21 @@ bugs. On submission day this file becomes the answers to the three required ques
   app is used and no client registration is needed). Making that difference explicit on both pages
   would have saved a full architecture detour.
 
+- 2026-07-23 (SDK 0.8.3, live): **`auth.verifyOtp` silently drops a mis-named param and produces a
+  user-facing dead end.** The method signature is `verifyOtp({ email, otpCode })` (it posts
+  `otp_code`); we passed the intuitive `{ email, otp }`, so axios stripped the undefined field and
+  every verification failed with a generic server error. Nothing catches this client-side: no
+  runtime validation, and in a plain JS app no type error either. A real unverified user was stuck
+  in a loop of "stale" codes until we read the SDK source. Suggestion: validate required params in
+  the SDK and throw a descriptive error (`verifyOtp requires otpCode`), or accept `otp` as an
+  alias. Repro: `base44.auth.verifyOtp({ email, otp: "123456" })` -> request body `{email}` only.
+
+- 2026-07-23 (live, observed while testing recovery flows): **Account-existence disclosure is
+  inconsistent across auth endpoints.** `POST /auth/reset-password-request` is deliberately silent
+  for unknown emails (200 either way - good), but `POST /auth/resend-otp` answers `User not found`
+  for a nonexistent address, so it can be used to enumerate which emails have accounts. Suggestion:
+  make resend-otp respond 200 unconditionally, like the reset request does.
+
 - 2026-07-23 (SDK 0.8.3, Node headless): **The realtime `subscribe()` socket connects ANONYMOUSLY
   and silently in Node - zero events, no error - when the token is not passed to `createClient`.**
   `client.js` sets `socketConfig.token` from `createClient(config).token`, and the only fallback is
