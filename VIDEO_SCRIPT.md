@@ -12,15 +12,16 @@ Screen: a cluttered Gmail inbox, search "order" showing dozens of merchant email
 
 ## Beat 2: onboarding + the live moment (30-40s)
 
-Screen: iTrack onboarding screen. Point at the personal address, click Copy.
+Screen: iTrack onboarding screen. Click "Connect Gmail", show Google's consent screen (read-only
+scope visible), approve, land back in iTrack.
 
-> "iTrack gives me a personal email address. I forward any order email to it, once, or set a Gmail
-> filter that forwards for me. Watch what happens."
+> "I connect my own Gmail. Read-only, one click, and I can disconnect anytime."
 
-Screen: split view or quick cut: forward a real order email from Gmail, then the iTrack dashboard
-open in another window. The card appears live, with a toast, no refresh.
+Screen: the first-sync progress ("Scanning your inbox... 12 order emails imported"), then the
+dashboard filling with cards live.
 
-> "No refresh. The email became a live tracking card: what I bought, where it is, when it lands."
+> "iTrack scans my last 60 days of mail, finds the order emails, and every one becomes a live
+> tracking card: what I bought, where it is, when it lands. No refresh, no setup, no forwarding."
 
 ## Beat 3: card anatomy (15-20s)
 
