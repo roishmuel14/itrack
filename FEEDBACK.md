@@ -75,6 +75,27 @@ bugs. On submission day this file becomes the answers to the three required ques
 
 ## Bugs (with repro)
 
+- 2026-07-23 (BLOCKER for BYO app-user Gmail OAuth on a default `<slug>.base44.app` app):
+  **The app-user connector OAuth flow redirects to the APEX `https://base44.app/api/external-auth/callback`,
+  which Google refuses to register because `base44.app` is on the Public Suffix List** (like
+  `vercel.app`/`netlify.app`) - Google errors "Invalid Redirect: must use a domain that is a valid
+  Top private domain." This CONTRADICTS Base44's own "View redirect URIs for your apps" modal, which
+  for this app listed only registerable URIs: `https://app.base44.com/api/external-auth/callback`
+  and the slug subdomains `https://i-track-2bdb7160.base44.app/...` (+ `app--`, `preview--`,
+  `share--` variants). I registered ALL of those in the Google client; the live "Connect Gmail" on
+  `https://i-track-2bdb7160.base44.app` still failed with `redirect_uri_mismatch`, redirect_uri =
+  `https://base44.app/...` (decoded from the accounts.google.com error). Repro: create a BYO Google
+  OAuth client, register exactly the URIs the modal shows, set up the Gmail app-user connector,
+  open the hosted slug app, click Connect - Google rejects because the runtime sent the apex, which
+  is not registerable and was never in the modal's list. Expected: the runtime should redirect to
+  the slug subdomain it told me to register (that one IS registerable and would match). Net effect:
+  BYO per-user Gmail OAuth appears impossible on a default `<slug>.base44.app` app; it likely needs
+  a CUSTOM DOMAIN (Base44's custom-Google-OAuth docs do start with "connect a custom domain"), but
+  the connectors "redirect URIs" modal never says so and offers slug URIs that the flow doesn't use.
+  Asks: (a) make the app-user connector flow redirect to the slug subdomain (or app.base44.com) that
+  the modal advertises, OR (b) if a custom domain is truly required, say so in the modal and the
+  Gmail-connector docs and stop listing slug URIs that won't be used.
+
 - 2026-07-23: **The workflow builder mis-applied a multi-workflow prompt: daily schedules came out
   as 15-minute schedules.** Prompted the dashboard AI (via MCP edit) to create three workflows with
   explicit cadences ("Refund scan ... DAILY at 03:00 UTC", "Daily digest ... DAILY at 07:00 UTC",
