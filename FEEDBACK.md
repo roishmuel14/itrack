@@ -25,6 +25,12 @@ bugs. On submission day this file becomes the answers to the three required ques
   surfacing the body on `err.response.data` made server-to-toast error plumbing trivial.
 - 2026-07-22: `base44 agents push` + entity tools: the assistant answered "Where are my LED strip
   lights?" correctly on the FIRST try, reading the user's own orders through RLS-scoped tools.
+- 2026-07-23: **Realtime `subscribe()` enforces RLS per-subscriber (F6 AC2 verified live, two
+  accounts).** All users share one room per entity (`entities:<appId>:<Entity>`), yet in a
+  two-account test account B received ONLY its own 5 create/update/delete events and NONE of
+  account A's, which were churned in the same rooms during the same window. The server filters the
+  broadcast by row ownership before delivery - exactly what we needed and could not safely assume.
+  PRD risk #2 (subscribe leaking across users) closed; no polling fallback required.
 
 ## Where we got stuck / confused
 
@@ -64,6 +70,19 @@ bugs. On submission day this file becomes the answers to the three required ques
   application" but the shared-connector page never states the mirror fact (that Base44's own OAuth
   app is used and no client registration is needed). Making that difference explicit on both pages
   would have saved a full architecture detour.
+
+- 2026-07-23 (SDK 0.8.3, Node headless): **The realtime `subscribe()` socket connects ANONYMOUSLY
+  and silently in Node - zero events, no error - when the token is not passed to `createClient`.**
+  `client.js` sets `socketConfig.token` from `createClient(config).token`, and the only fallback is
+  `getAccessToken()` -> `window.localStorage`, absent in Node. A client that authenticates AFTER
+  construction (`auth.loginViaEmailPassword` / `setToken`) therefore has authed HTTP (in-memory
+  token on axios) but an UNAUTHED socket: it connects, joins no authed rooms, and the callback
+  never fires - with no `error`/`connect_error`. This cost a full debug cycle on a two-account RLS
+  test (0 events read as broken realtime, not as a missing token). Fix on our side: resolve the
+  token first and pass it to `createClient({ token })`. Suggestions: (a) have `setToken()` refresh
+  the socket auth (`updateConfig`) so post-construction login also authenticates the socket,
+  (b) emit a console warning when the realtime socket connects with no token, (c) document that
+  headless/Node realtime needs the token in `createClient`.
 
 ## What is missing / feature requests
 
