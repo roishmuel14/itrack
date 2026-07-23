@@ -46,8 +46,11 @@ built-in URL. Flip the flag when Base44 fixes the redirect. itrack.inboxfiles.co
 
 - [x] Stage 0: Foundation (scaffold, git, deploy skeleton) - done 2026-07-22; Roi manual items
       (enroll, iTrack Gmail account, Builder+ confirm) still pending, gate stage 2
-- [~] Stage 1: Data layer - ALL DONE except the two-account leak test (needs Roi: register
-      account B, fill scripts/.env.leaktest)
+- [x] Stage 1: Data layer - COMPLETE 2026-07-23. Two-account leak test PASSED on the live app:
+      reads isolated (B sees 0 of A's 6 orders, 0 foreign in every per-user entity) AND realtime
+      isolated + functional (B got exactly its own 5 events, 0 of A's; positive control confirms
+      subscribe() delivers, so it is not a false pass). PRD risk #2 resolved: subscribe() respects
+      RLS, no polling fallback needed.
 - [~] Stage 2: Gmail connector spike - connector pushed, PENDING Roi: create the iTrack Gmail
       account + authorize (fresh URL below), then rerun `base44 functions deploy` + send the
       3 test emails
@@ -152,15 +155,20 @@ pattern proven once, RLS verified with two accounts.
       alias `3e0axvd4`, owner_email stamped server-side; second invoke -> `created:false` (idempotent);
       bootstrap-race self-heal included. Anonymous REST reads on per-user entities return `[]`
       (RLS filters, doesn't 401); RefundPolicy public read serves 6 rows.
-- [ ] Two-account leak test: scripts/leak-test.mjs (reads + realtime, exit-coded) +
-      scripts/leak-test-trigger.ts are WRITTEN and ready. **BLOCKED on Roi: register test account
-      B on the live app, put its credentials in gitignored scripts/.env.leaktest
-      (ITRACK_TEST_B_EMAIL / ITRACK_TEST_B_PASSWORD), then run:
-      `node --env-file=scripts/.env.leaktest scripts/leak-test.mjs` + the trigger. (Claude cannot
-      create accounts.)**
+- [x] Two-account leak test PASSED (2026-07-23, live app). Test account B =
+      keyboardconverter@gmail.com (non-admin). Reads: 0 foreign across all 6 per-user entities
+      (A holds 6 orders, B sees 0). Realtime: B received its own 5 events (create/update/delete of
+      a B-owned Order + TrackingEvent) and 0 A-owned events, while the admin trigger churned both
+      A- and B-owned rows in the same rooms during the same window; the own-event delivery is the
+      positive control that rules out a dead-subscription false pass. Harness note (also in
+      FEEDBACK.md): in Node the SDK realtime socket authenticates only from the token passed to
+      createClient (no localStorage fallback), so the token must be resolved BEFORE createClient or
+      the socket connects anonymously and silently receives nothing.
 
-**DoD:** schemas live and matching the repo; policies seeded; bootstrap returns unique aliases for
-two accounts; **leak test passes for reads AND realtime**; anonymous function call gets a clean 401.
+**DoD:** schemas live and matching the repo; policies seeded; bootstrap stamps per-user owner_email
+server-side for two accounts (the "unique alias" clause is retired by the 2026-07-23 per-user-OAuth
+pivot); **leak test passes for reads AND realtime** (PASSED 2026-07-23); anonymous function call
+gets a clean 401 (verified stage 1). ALL MET - stage complete.
 
 ---
 

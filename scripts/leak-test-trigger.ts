@@ -1,34 +1,44 @@
-// Companion to leak-test.mjs: while B's realtime window is open, create,
-// update, and delete an Order + TrackingEvent owned by A (the admin/CLI user).
-// B must receive NONE of these events.
-// Run (as the admin CLI login): cat scripts/leak-test-trigger.ts | base44 exec
+// Companion to leak-test.mjs: fired (as the admin CLI user, service role) WHILE
+// B's realtime window is open. Produces two kinds of churn:
+//   - A-owned Order + TrackingEvent -> B must receive NONE of these (isolation)
+//   - B-owned Order + TrackingEvent -> B MUST receive these (positive control:
+//     proves subscribe() actually delivers, so "0 foreign events" cannot be a
+//     false pass caused by a silently-dead subscription; PRD risk #2)
+// Every row is created, updated, then deleted again.
+// Run (from the MAIN repo, admin login): cat scripts/leak-test-trigger.ts | base44 exec
 
 const A_EMAIL = "roishmuel14@gmail.com";
+const B_EMAIL = "keyboardconverter@gmail.com";
 
-const order = await base44.entities.Order.create({
-  owner_email: A_EMAIL,
-  merchant_name: "LeakTest Store",
-  merchant_domain: "leaktest.example",
-  order_number: "LT-1",
-  status: "ordered",
-});
-console.log(`created A-owned order ${order.id}`);
+async function churn(owner, tag) {
+  const order = await base44.entities.Order.create({
+    owner_email: owner,
+    merchant_name: `LeakTest ${tag}`,
+    merchant_domain: "leaktest.example",
+    order_number: `LT-${tag}-${Date.now()}`,
+    status: "ordered",
+  });
+  const event = await base44.entities.TrackingEvent.create({
+    owner_email: owner,
+    order_id: order.id,
+    type: "order_confirmation",
+    occurred_at: new Date().toISOString(),
+    title: `Leak test event ${tag}`,
+    source: "system",
+  });
+  await base44.entities.Order.update(order.id, { status: "shipped" });
+  console.log(`churned ${tag} (owner=${owner}) order=${order.id} event=${event.id}`);
+  return { order, event };
+}
 
-const event = await base44.entities.TrackingEvent.create({
-  owner_email: A_EMAIL,
-  order_id: order.id,
-  type: "order_confirmation",
-  occurred_at: new Date().toISOString(),
-  title: "Leak test event",
-  source: "system",
-});
-console.log(`created A-owned tracking event ${event.id}`);
+const a = await churn(A_EMAIL, "A");
+const b = await churn(B_EMAIL, "B");
 
-await base44.entities.Order.update(order.id, { status: "shipped" });
-console.log("updated A-owned order status");
+// Give realtime a generous moment to fan out create+update before we delete.
+await new Promise((r) => setTimeout(r, 6000));
 
-await new Promise((r) => setTimeout(r, 2000));
-
-await base44.entities.TrackingEvent.delete(event.id);
-await base44.entities.Order.delete(order.id);
-console.log("cleaned up leak-test rows");
+for (const x of [a, b]) {
+  await base44.entities.TrackingEvent.delete(x.event.id);
+  await base44.entities.Order.delete(x.order.id);
+}
+console.log("cleaned up all leak-test rows (A + B)");
