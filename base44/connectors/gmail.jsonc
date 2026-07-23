@@ -1,9 +1,0 @@
-// Shared iTrack Gmail inbox connector (PRD section 7).
-// Least privilege: read-only; ingest never sends or modifies mail.
-// Authorized once by Roi with the iTrack Gmail account.
-// If the platform rejects a readonly-only scope set, accept the full set and
-// log the surprise to FEEDBACK.md (PRD risk #4).
-{
-  "type": "gmail",
-  "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
-}

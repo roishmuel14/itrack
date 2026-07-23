@@ -1,15 +1,17 @@
-// The ingestion pipeline core (PRD F1 + F2). One entry point per source:
-//   processGmailMessage - fetch, idempotency-check, route by alias, then run
-//   runCorePipeline     - classify/extract via LLM, merge into entities
+// The ingestion pipeline core (PRD F1 + F2, amended 2026-07-23 to the
+// per-user Gmail OAuth model). Entry points:
+//   processOwnedGmailMessage - fetch one message from the OWNER's own inbox
+//                              (their app-user connector token), then run
+//   runCorePipeline          - classify/extract via LLM, merge into entities
 // runCorePipeline is also called directly by orders/manualAdd (pasted text).
 //
 // Invariants enforced here:
-// - Idempotent by gmail_message_id (EmailRecord checked first).
-// - Route ONLY on exact alias-token match against UserSettings; else quarantine.
+// - Idempotent per (owner_email, gmail_message_id): EmailRecord checked first.
+// - Ownership comes from the authenticated caller whose token fetched the
+//   mail; there is no routing step and no cross-user path.
 // - Statuses are monotonic; this module is their single writer.
 // - EmailRecord.snippet <= 2000 chars, never the full body.
 
-import { extractAliasCandidates, extractAliasCandidatesFromText } from "./aliasRouter.ts";
 import { extractImageCandidates, htmlToText, truncateForLLM } from "./htmlToText.ts";
 import { analyzeEmail, arbitrateSameOrder, type ExtractionResult } from "./extract.ts";
 import {
@@ -40,7 +42,6 @@ export interface PipelineResult {
 
 export interface CoreInput {
   ownerEmail: string;
-  aliasToken?: string;
   from: string;
   subject: string;
   html: string;
@@ -103,16 +104,21 @@ function orderSummaryFor(o: {
 
 // ---------------------------------------------------------------- gmail path
 
-export async function processGmailMessage(
+// Process one message from the owner's OWN mailbox (app-user connector).
+export async function processOwnedGmailMessage(
   base44: Base44Client,
   gmailToken: string,
   messageId: string,
-  inboxAddress: string | undefined,
+  ownerEmail: string,
 ): Promise<PipelineResult> {
   const service = base44.asServiceRole.entities;
 
-  // 1. Idempotency (PRD F1 AC3): silently skip anything already recorded.
-  const existing = await service.EmailRecord.filter({ gmail_message_id: messageId });
+  // 1. Idempotency (PRD F1 AC3), scoped to the owner: message ids are
+  // per-mailbox, so the pair is the true key.
+  const existing = await service.EmailRecord.filter({
+    gmail_message_id: messageId,
+    owner_email: ownerEmail,
+  });
   if (existing.length > 0) {
     return { status: "duplicate", emailRecordId: existing[0].id };
   }
@@ -124,57 +130,13 @@ export async function processGmailMessage(
     return { status: "failed", detail: `gmail fetch: ${err instanceof Error ? err.message : err}` };
   }
 
-  const receivedAt = new Date(Number(msg.internalDate)).toISOString();
-  const from = msg.headers["From"] ?? "";
-  const subject = msg.headers["Subject"] ?? "";
-  const bodyTextForScan = msg.text || htmlToText(msg.html);
-
-  // 2. Routing: exact alias-token match or quarantine (PRD section 3.1).
-  let candidates = extractAliasCandidates(msg.headers, inboxAddress);
-  if (candidates.length === 0 && inboxAddress) {
-    candidates = extractAliasCandidatesFromText(
-      `${subject}\n${bodyTextForScan}`,
-      inboxAddress,
-    );
-  }
-  // Routing diagnostics (stage 2 gate evidence): which headers carried what.
-  console.log(
-    `route msg=${messageId} candidates=${JSON.stringify(candidates.map((c) => `${c.header}:${c.token}`))} ` +
-      `deliveredTo=${JSON.stringify(msg.headers["Delivered-To"] ?? null)} to=${JSON.stringify(msg.headers["To"] ?? null)} ` +
-      `xFwdTo=${JSON.stringify(msg.headers["X-Forwarded-To"] ?? null)}`,
-  );
-  let ownerEmail: string | null = null;
-  let aliasToken: string | undefined;
-  for (const c of candidates) {
-    const settings = await service.UserSettings.filter({ alias_token: c.token });
-    if (settings.length > 0) {
-      ownerEmail = settings[0].owner_email;
-      aliasToken = c.token;
-      break;
-    }
-  }
-  if (!ownerEmail) {
-    const rec = await service.EmailRecord.create({
-      gmail_message_id: messageId,
-      thread_id: msg.threadId,
-      from_address: from,
-      subject: subject.slice(0, 490),
-      received_at: receivedAt,
-      alias_token: candidates[0]?.token,
-      parse_status: "unroutable",
-      snippet: snippetOf(bodyTextForScan),
-    });
-    return { status: "unroutable", emailRecordId: rec.id };
-  }
-
   return await runCorePipeline(base44, {
     ownerEmail,
-    aliasToken,
-    from,
-    subject,
+    from: msg.headers["From"] ?? "",
+    subject: msg.headers["Subject"] ?? "",
     html: msg.html,
     text: msg.text,
-    receivedAt,
+    receivedAt: new Date(Number(msg.internalDate)).toISOString(),
     gmailMessageId: messageId,
     threadId: msg.threadId,
     source: "gmail",
@@ -211,7 +173,6 @@ export async function runCorePipeline(
         from_address: input.from,
         subject: input.subject.slice(0, 490),
         received_at: input.receivedAt,
-        alias_token: input.aliasToken,
         classification: "irrelevant",
         parse_status: "irrelevant",
         confidence: extraction.confidence,
@@ -355,7 +316,6 @@ export async function runCorePipeline(
       from_address: input.from,
       subject: input.subject.slice(0, 490),
       received_at: input.receivedAt,
-      alias_token: input.aliasToken,
       classification: extraction.classification,
       parse_status: parseStatus,
       confidence: extraction.confidence,
@@ -432,7 +392,6 @@ export async function runCorePipeline(
         from_address: input.from,
         subject: input.subject.slice(0, 490),
         received_at: input.receivedAt,
-        alias_token: input.aliasToken,
         parse_status: "failed",
         snippet,
         error: detail.slice(0, 900),

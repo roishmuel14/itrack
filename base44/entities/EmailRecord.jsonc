@@ -1,19 +1,18 @@
-// One processed inbound email; the idempotency key and audit trail of the ingest
-// pipeline. Unroutable/quarantined records carry no owner_email, so only admin
-// ever reads them.
+// One processed email; the idempotency anchor and audit trail of the ingest
+// pipeline. Idempotency key is the (owner_email, gmail_message_id) pair:
+// message ids are per-mailbox in the per-user OAuth model.
 {
   "name": "EmailRecord",
   "type": "object",
   "title": "Email Record",
   "description": "One processed inbound email; idempotency key and audit trail",
   "properties": {
-    "owner_email":      { "type": "string", "format": "email", "description": "Empty when unroutable" },
-    "gmail_message_id": { "type": "string", "minLength": 1, "description": "IDEMPOTENCY KEY: skip if already recorded" },
+    "owner_email":      { "type": "string", "format": "email", "description": "The user whose mailbox this came from" },
+    "gmail_message_id": { "type": "string", "minLength": 1, "description": "IDEMPOTENCY KEY together with owner_email: skip if already recorded" },
     "thread_id":        { "type": "string" },
     "from_address":     { "type": "string" },
     "subject":          { "type": "string", "maxLength": 500 },
     "received_at":      { "type": "string", "format": "date-time" },
-    "alias_token":      { "type": "string", "description": "Token extracted from Delivered-To, if any" },
     "classification":   { "type": "string", "enum": ["order_confirmation", "shipping_update", "delivery", "delay", "seller_message", "refund_update", "other_order_related", "irrelevant"] },
     "parse_status":     { "type": "string", "enum": ["pending", "parsed", "low_confidence", "irrelevant", "unroutable", "failed"], "default": "pending" },
     "confidence":       { "type": "number" },

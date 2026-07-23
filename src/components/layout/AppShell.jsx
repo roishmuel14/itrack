@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { Package, ReceiptText, Settings, LogOut, ShieldAlert } from 'lucide-react';
+import { Package, ReceiptText, Settings, LogOut } from 'lucide-react';
 import { useAuth } from '@/api/auth';
 import AssistantChat from '@/components/AssistantChat';
 
@@ -21,11 +21,9 @@ function Logo() {
 }
 
 export default function AppShell() {
-  const { user, logout, isAdmin } = useAuth();
+  const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const nav = isAdmin
-    ? [...NAV, { to: '/admin/quarantine', label: 'Quarantine', icon: ShieldAlert }]
-    : NAV;
+  const nav = NAV;
 
   return (
     <div className="min-h-screen flex flex-col">

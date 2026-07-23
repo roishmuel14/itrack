@@ -6,6 +6,27 @@ gets ticked only after the stage's DoD passes on the DEPLOYED app (not just loca
 
 Competition deadline: **submit by July 28, 2026**. Day mapping at the bottom.
 
+## PIVOT 2026-07-23 (Roi's decision): per-user Gmail OAuth, no shared inbox
+
+Roi rejected the dedicated iTrack Gmail account; each user connects their OWN Gmail (PRD
+amendment v1.1). Executed same morning: `inbox/syncMyMail` (batched, incremental, idempotent per
+owner+message) replaces onNewMail/sweep; alias routing, forwarding assist, quarantine, SyncState,
+and the shared connector are DELETED (code + remote); bootstrap no longer issues aliases and
+reports Gmail connection state; onboarding/dashboard/settings rebuilt around Connect Gmail ->
+first-sync-with-progress; "Inbox sweep" workflow deleted (Refund scan + Daily digest stay).
+
+**ROI MANUAL (the new, smaller list - no new Gmail account needed):**
+1. Google Cloud Console: create an OAuth consent screen (External, **Testing** mode), add scope
+   `gmail.readonly`, add test users: roishmuel14@gmail.com + the demo/test accounts.
+2. Create an OAuth Client (type: Web application). The redirect URIs to paste come from Base44:
+   Workspace Settings -> Integrations -> Connectors -> Gmail -> App user credential -> Add
+   Connection (it shows the exact callback URLs; add both live and preview if offered).
+3. Finish that Base44 dialog with the Client ID + Client Secret -> copy the **connector ID**.
+4. Run: `base44 secrets set GMAIL_CONNECTOR_ID=<the-connector-id>` (or paste it here and I run it).
+5. In the app, click Connect Gmail with your own account -> I verify the end-to-end sync.
+   Note: with the consent screen in Testing mode, ONLY allowlisted test users can connect (judges
+   use the demo account + manual add; the video shows the real OAuth flow).
+
 ## Current status
 
 - [x] Stage 0: Foundation (scaffold, git, deploy skeleton) - done 2026-07-22; Roi manual items

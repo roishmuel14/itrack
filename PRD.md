@@ -12,6 +12,21 @@
 This document is the source of truth for requirements. When it conflicts with the concept doc, this
 document wins.
 
+> **AMENDMENT v1.1 (2026-07-23, Roi's decision): per-user Gmail OAuth replaces the shared-inbox
+> forwarding model.** Roi rejected the dedicated-app-Gmail-account approach: each user connects
+> their OWN Gmail via a Base44 app-user connector (read-only scope). Consequences: section 3.1's
+> forwarding/alias/quarantine design is RETIRED (no shared inbox, no alias tokens, no
+> `inbox/onNewMail` webhook, no sweep cron, no quarantine screen); ingest is `inbox/syncMyMail`,
+> which runs the same parse pipeline over the signed-in user's own mailbox on app load, on demand,
+> and on an interval while the app is open (app-user tokens are request-scoped, so there is NO
+> background sync when the user is away; this is the accepted trade-off). First sync imports the
+> last 60 days. F8's "personal address" onboarding becomes "Connect your Gmail". Setup requires a
+> Google OAuth app (Client ID/Secret registered in Base44 Workspace Settings); with the consent
+> screen in Testing mode only allowlisted test users can connect, so the judge path is the demo
+> account + manual add (F9), unchanged. Idempotency key is now (owner_email, gmail_message_id).
+> Everything else (data model minus SyncState/alias fields, merge engine, refund radar, digest,
+> agent, realtime, manual add) stands as written.
+
 ---
 
 ## 1. Overview

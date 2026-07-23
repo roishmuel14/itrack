@@ -8,7 +8,6 @@ import OrderDetail from '@/pages/OrderDetail';
 import Onboarding from '@/pages/Onboarding';
 import Refunds from '@/pages/Refunds';
 import Settings from '@/pages/Settings';
-import AdminQuarantine from '@/pages/AdminQuarantine';
 
 function FullScreenSpinner() {
   return (
@@ -37,7 +36,6 @@ export default function App() {
               <Route path="onboarding" element={<Onboarding />} />
               <Route path="refunds" element={<Refunds />} />
               <Route path="settings" element={<Settings />} />
-              <Route path="admin/quarantine" element={<AdminQuarantine />} />
               <Route path="login" element={<Navigate to="/" replace />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

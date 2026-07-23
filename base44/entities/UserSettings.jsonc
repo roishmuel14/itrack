@@ -1,19 +1,19 @@
-// One row per user. alias_token is THE routing key for inbound mail
-// (itrackapp+<token>@gmail.com). Created only by account/bootstrap.
+// One row per user: digest preferences + Gmail connection state.
+// Created only by account/bootstrap; all writes via backend functions.
 {
   "name": "UserSettings",
   "type": "object",
   "title": "User Settings",
-  "description": "Per-user settings and the unique inbound-mail alias token",
+  "description": "Per-user preferences and Gmail sync state",
   "properties": {
-    "owner_email":          { "type": "string", "format": "email", "description": "Unique per user" },
-    "alias_token":          { "type": "string", "minLength": 8, "description": "THE routing key; 8 lowercase alphanumerics, unique" },
-    "digest_enabled":       { "type": "boolean", "default": true },
-    "digest_hour_utc":      { "type": "integer", "minimum": 0, "maximum": 23, "default": 7 },
-    "last_digest_date":     { "type": "string", "format": "date", "description": "UTC date of the last digest sent; hard once-per-day guard" },
-    "forwarding_confirmed": { "type": "boolean", "default": false }
+    "owner_email":        { "type": "string", "format": "email", "description": "Unique per user" },
+    "digest_enabled":     { "type": "boolean", "default": true },
+    "digest_hour_utc":    { "type": "integer", "minimum": 0, "maximum": 23, "default": 7 },
+    "last_digest_date":   { "type": "string", "format": "date", "description": "UTC date of the last digest sent; hard once-per-day guard" },
+    "gmail_connected":    { "type": "boolean", "default": false, "description": "Whether the user's own Gmail is connected (app-user connector)" },
+    "last_gmail_sync_at": { "type": "string", "format": "date-time", "description": "Per-user incremental sync cursor" }
   },
-  "required": ["owner_email", "alias_token"],
+  "required": ["owner_email"],
   "rls": {
     "create": { "user_condition": { "role": "admin" } },
     "read": {

@@ -30,10 +30,12 @@ Build-Off entry; **submission deadline July 28, 2026**. English-only UI, single-
    read + `functions.invoke` + `subscribe` only. Every per-user row gets `owner_email` stamped
    server-side from `auth.me()` (never from the request body); RLS reads key on
    `data.owner_email`.
-4. **Ingest invariants:** idempotent by `gmail_message_id` (check EmailRecord first); route ONLY
-   on exact alias-token match, else quarantine (`parse_status: "unroutable"`); statuses are
-   monotonic (ordered -> shipped -> in_transit -> out_for_delivery -> delivered) and only the
-   merge engine sets them.
+4. **Ingest invariants (per-user OAuth model, PRD amendment v1.1):** each user syncs their OWN
+   Gmail via the app-user connector (`GMAIL_CONNECTOR_ID` secret; token via
+   `getCurrentAppUserConnection`, request-scoped, so sync only runs for the signed-in caller);
+   idempotent per (`owner_email`, `gmail_message_id`) checked against EmailRecord first; statuses
+   are monotonic (ordered -> shipped -> in_transit -> out_for_delivery -> delivered) and only the
+   merge engine sets them. No shared inbox, no alias routing, no background sweep.
 5. **Function code contract:** wrap `auth.me()` in try/catch (it throws on anonymous); business
    failures return `{ error, reasons: [{code, message}] }` with 4xx; every route is anonymously
    reachable, so cron/webhook paths accept only declared automation args and stay idempotent.
@@ -52,9 +54,11 @@ add databases, auth providers, or hosting outside Base44.
 
 ## Layout
 
-`base44/entities/` 8 schemas; `base44/functions/` 11 functions (inbox/, account/, settings/,
-orders/, refunds/, digest/); `base44/shared/` parse+merge modules; `base44/agents/
-itrack_assistant.jsonc`; `base44/connectors/gmail.jsonc`; `scripts/` exec-run seed/verify tools.
+`base44/entities/` 7 schemas; `base44/functions/` 9 functions (inbox/syncMyMail, account/,
+settings/, orders/, refunds/, digest/); `base44/shared/` parse+merge modules; `base44/agents/
+itrack_assistant.jsonc`; `scripts/` exec-run seed/verify tools. Gmail access is a per-user
+app-user connector configured in Workspace Settings (connector id in the `GMAIL_CONNECTOR_ID`
+secret), not a repo connector file.
 App id lives in gitignored `base44/.app.jsonc`; record id + live URL here after stage 0:
 **app id: 6a6117b2e209abd12bdb7160, URL: https://i-track-2bdb7160.base44.app**.
 

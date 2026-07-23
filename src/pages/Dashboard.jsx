@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, Mail, Plus, PackageOpen, RefreshCw, Sparkles } from 'lucide-react';
+import { ChevronDown, Loader2, Mail, Plus, PackageOpen, RefreshCw, Sparkles } from 'lucide-react';
 import { Order, RefundOpportunity, TrackingEvent, subscribeTo } from '@/api/entities';
 import { useAuth } from '@/api/auth';
+import { useGmailSync } from '@/api/useGmailSync';
 import { useToast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
-import CopyButton from '@/components/CopyButton';
 import ManualAddDialog from '@/components/ManualAddDialog';
 import OrderCard from '@/components/OrderCard';
 import ActivityFeed from '@/components/ActivityFeed';
@@ -38,7 +38,7 @@ function StatCard({ label, value, tone }) {
 }
 
 export default function Dashboard() {
-  const { aliasAddress } = useAuth();
+  const { gmail } = useAuth();
   const toast = useToast();
   const [orders, setOrders] = useState(null);
   const [events, setEvents] = useState([]);
@@ -97,6 +97,19 @@ export default function Dashboard() {
     };
   }, [load, toast]);
 
+  const { sync, syncing, progress } = useGmailSync();
+  const syncedOnce = useRef(false);
+  useEffect(() => {
+    if (!gmail.connected || syncedOnce.current) return;
+    syncedOnce.current = true;
+    sync().then((res) => {
+      if (res.ok && res.processed > 0) {
+        toast.success('Inbox synced', `${res.processed} new order update${res.processed === 1 ? '' : 's'}.`);
+        load(true);
+      }
+    });
+  }, [gmail.connected, sync, toast, load]);
+
   const refundsByOrder = useMemo(() => {
     const m = {};
     for (const r of refunds) m[r.order_id] = (m[r.order_id] ?? 0) + 1;
@@ -144,26 +157,36 @@ export default function Dashboard() {
           </div>
           <h1 className="text-2xl font-extrabold tracking-tight mb-2">Your deliveries, one dashboard</h1>
           <p className="text-muted-foreground mb-8">
-            Forward any order email to your personal iTrack address and watch it become a live tracking card.
+            Connect your Gmail and every order you're waiting for becomes a live tracking card.
           </p>
-          <div className="bg-card rounded-2xl border card-shadow p-5 text-start mb-6">
-            <p className="text-sm font-semibold mb-1 flex items-center gap-1.5">
-              <Mail className="w-4 h-4 text-primary" /> Your iTrack address
-            </p>
-            {aliasAddress ? (
+          <div className="bg-card rounded-2xl border card-shadow p-6 text-start mb-6">
+            {syncing ? (
+              <div className="flex items-center gap-3">
+                <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                <div className="text-sm">
+                  <p className="font-medium">Scanning your inbox...</p>
+                  <p className="text-muted-foreground">{progress?.processed ?? 0} order emails imported so far</p>
+                </div>
+              </div>
+            ) : gmail.connected ? (
               <div className="flex items-center justify-between gap-3 flex-wrap">
-                <code className="text-sm bg-muted rounded-lg px-2.5 py-1.5 break-all">{aliasAddress}</code>
-                <CopyButton text={aliasAddress} label="Copy address" />
+                <p className="text-sm text-muted-foreground">Gmail is connected. Scan your inbox for orders:</p>
+                <Button onClick={() => sync().then((r) => r.ok && load())}>
+                  <Sparkles className="w-4 h-4 me-1.5" /> Scan my inbox
+                </Button>
               </div>
             ) : (
-              <div className="h-8 bg-muted rounded-lg animate-pulse" />
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <p className="text-sm font-semibold flex items-center gap-1.5">
+                  <Mail className="w-4 h-4 text-primary" /> Read-only, one click, disconnect anytime
+                </p>
+                <Link to="/onboarding">
+                  <Button>Connect Gmail</Button>
+                </Link>
+              </div>
             )}
-            <p className="text-xs text-muted-foreground mt-3">
-              Try it now: forward one order confirmation, then watch the dashboard. Or set up
-              automatic forwarding in <Link to="/onboarding" className="text-primary font-medium">2 minutes</Link>.
-            </p>
           </div>
-          <Button onClick={() => setAddOpen(true)}>
+          <Button variant="outline" onClick={() => setAddOpen(true)}>
             <Plus className="w-4 h-4 me-1.5" /> Or paste an email instead
           </Button>
         </div>
@@ -231,9 +254,22 @@ export default function Dashboard() {
             </button>
           ))}
         </div>
-        <Button onClick={() => setAddOpen(true)} variant="outline">
-          <Plus className="w-4 h-4 me-1.5" /> Add order
-        </Button>
+        <div className="flex items-center gap-2">
+          {gmail.connected && (
+            <Button
+              variant="ghost"
+              onClick={() => sync().then((r) => r.ok && load(true))}
+              disabled={syncing}
+              title="Check Gmail for new updates"
+            >
+              {syncing ? <Loader2 className="w-4 h-4 me-1.5 animate-spin" /> : <RefreshCw className="w-4 h-4 me-1.5" />}
+              {syncing ? 'Syncing...' : 'Sync now'}
+            </Button>
+          )}
+          <Button onClick={() => setAddOpen(true)} variant="outline">
+            <Plus className="w-4 h-4 me-1.5" /> Add order
+          </Button>
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-[1fr_300px] gap-6 items-start">

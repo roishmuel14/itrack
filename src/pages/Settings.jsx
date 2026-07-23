@@ -1,15 +1,14 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, Mail, Wand2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Mail } from 'lucide-react';
 import { useAuth } from '@/api/auth';
 import { invokeFunction } from '@/api/functions';
 import { useToast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import CopyButton from '@/components/CopyButton';
 
 export default function Settings() {
-  const { user, settings, setSettings, aliasAddress, refresh } = useAuth();
+  const { user, settings, setSettings, gmail, disconnectGmail, refresh } = useAuth();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [wipeOpen, setWipeOpen] = useState(false);
@@ -32,7 +31,7 @@ export default function Settings() {
     setBusy(true);
     try {
       await invokeFunction('account/wipe', { confirm: true });
-      toast.success('All your data was deleted', 'A fresh iTrack address will be issued now.');
+      toast.success('All your data was deleted', 'Your account starts fresh.');
       setWipeOpen(false);
       setWipeText('');
       await refresh();
@@ -53,20 +52,37 @@ export default function Settings() {
           <p className="font-medium">{user?.email}</p>
         </div>
         <div>
-          <p className="text-sm font-semibold mb-1 flex items-center gap-1.5">
-            <Mail className="w-4 h-4 text-primary" /> Your iTrack address
+          <p className="text-sm font-semibold mb-2 flex items-center gap-1.5">
+            <Mail className="w-4 h-4 text-primary" /> Gmail connection
           </p>
-          {aliasAddress ? (
+          {gmail.connected ? (
             <div className="flex items-center justify-between gap-3 flex-wrap">
-              <code className="text-sm bg-muted rounded-lg px-2.5 py-1.5 break-all">{aliasAddress}</code>
-              <CopyButton text={aliasAddress} label="Copy" />
+              <p className="inline-flex items-center gap-1.5 text-sm text-[hsl(var(--status-delivered))] font-medium">
+                <CheckCircle2 className="w-4 h-4" /> Connected (read-only)
+              </p>
+              <Button
+                variant="ghost"
+                className="text-muted-foreground"
+                onClick={async () => {
+                  try {
+                    await disconnectGmail();
+                    toast.success('Gmail disconnected');
+                  } catch (err) {
+                    toast.notifyError(err, 'Cannot disconnect');
+                  }
+                }}
+              >
+                Disconnect
+              </Button>
             </div>
           ) : (
-            <div className="h-8 bg-muted rounded-lg animate-pulse" />
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <p className="text-sm text-muted-foreground">Not connected.</p>
+              <Link to="/onboarding" className="text-sm text-primary font-medium">
+                Connect your Gmail
+              </Link>
+            </div>
           )}
-          <Link to="/onboarding" className="inline-flex items-center gap-1.5 text-sm text-primary font-medium mt-3">
-            <Wand2 className="w-4 h-4" /> Set up automatic forwarding
-          </Link>
         </div>
       </div>
 
