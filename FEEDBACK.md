@@ -176,9 +176,11 @@ bugs. On submission day this file becomes the answers to the three required ques
   sharing a gmail_message_id, 18 duplicate TrackingEvents. Repro: `create()` a row then immediately
   `filter()` for it in the same function - it may be absent. Worked around app-side with a per-run
   in-memory cache (created rows are unioned into the merge candidates) plus an order-number-only
-  merge key; residual cross-invocation reprocessing (idempotency read-lag across separate calls)
-  remains a known limitation. Ask: document the read-after-write consistency model for entities, or
-  offer a strong-read / read-your-writes option for filter().
+  merge key; cross-invocation reprocessing (idempotency read-lag across the frontend's separate sync
+  calls) was then closed by switching `inbox/syncMyMail` to Gmail page-token pagination (one page per
+  call; the frontend echoes `next_page_token`), so no call re-lists a prior call's messages and the
+  read-lag never gets a second chance to duplicate. Ask still stands: document the read-after-write
+  consistency model for entities, or offer a strong-read / read-your-writes option for filter().
 
 - 2026-07-23: **The workflow builder mis-applied a multi-workflow prompt: daily schedules came out
   as 15-minute schedules.** Prompted the dashboard AI (via MCP edit) to create three workflows with

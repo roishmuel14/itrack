@@ -60,9 +60,12 @@ the other's just-created Order). Fix: a per-run in-memory cache in `base44/share
 `inbox/syncMyMail` (created orders/shipments are unioned into the merge candidates) and an
 order-number-only safety net in `mergeEngine.ts` `decideMerge`. Backfilled Roi's data (48 -> 36
 orders: 11 duplicate groups merged, 25 duplicate EmailRecords + 18 duplicate TrackingEvents removed).
-Residual: cross-invocation reprocessing across the frontend's rapid syncMyMail loop can still create
-duplicate EmailRecords/events (not usually duplicate Orders); logged in FEEDBACK.md as a platform
-consistency ask + a Stage-3 hardening TODO (before:-cursor paging or a periodic dedup pass).
+Cross-invocation reprocessing then CLOSED via page-token paging: `inbox/syncMyMail` processes one
+Gmail page per call and returns `next_page_token`; the frontend (`useGmailSync`) echoes it back so
+successive calls page through strictly older mail and never re-list what an earlier call handled.
+Verified by a forced 90-day re-scan: 4 pages, drained clean (`has_more=false`), 46 already-seen
+messages skipped, 0 duplicate groups. The underlying entity read-after-write consistency ask stays
+in FEEDBACK.md.
 
 ## Current status
 
