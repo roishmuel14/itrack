@@ -42,6 +42,28 @@ onboarding leads with manual add; Gmail card shows "coming soon"; appBaseUrl rev
 built-in URL. Flip the flag when Base44 fixes the redirect. itrack.inboxfiles.com stays connected
 (works, nicer URL) but is not relied on.
 
+## RESOLUTION 2026-07-23 (later same day): per-user Gmail WORKS; it was an app-side fix, not a wait
+
+The "hardcoded apex" diagnosis was wrong. Base44's connect-initiate endpoint MIRRORS THE REQUEST
+HOST into the OAuth redirect_uri, and the SDK's `createClient` defaults `serverUrl` to the
+`base44.app` apex (not derived from `appBaseUrl`), so `connectAppUser` POSTed initiate to the apex
+and got an unregisterable callback. Fix (shipped in `src/api/auth.jsx`): call the initiate endpoint
+on `window.location.origin`, whose slug callback is registered in the Google client.
+`GMAIL_CONNECT_ENABLED` flipped to `true`. Verified end-to-end through the live Connect Gmail button
+(readonly consent -> callback -> `syncMyMail`); 48 real orders imported from roishmuel14@gmail.com;
+idempotent re-sync adds zero. Full root cause + Base44 asks in FEEDBACK.md. Manual add remains
+available alongside.
+
+Merge dedup (Stage 3) FIXED same day: the live sync exposed duplicate rows caused by entity reads
+not being read-your-writes consistent (two emails about one order, processed 0-1s apart, each missed
+the other's just-created Order). Fix: a per-run in-memory cache in `base44/shared/pipeline.ts` +
+`inbox/syncMyMail` (created orders/shipments are unioned into the merge candidates) and an
+order-number-only safety net in `mergeEngine.ts` `decideMerge`. Backfilled Roi's data (48 -> 36
+orders: 11 duplicate groups merged, 25 duplicate EmailRecords + 18 duplicate TrackingEvents removed).
+Residual: cross-invocation reprocessing across the frontend's rapid syncMyMail loop can still create
+duplicate EmailRecords/events (not usually duplicate Orders); logged in FEEDBACK.md as a platform
+consistency ask + a Stage-3 hardening TODO (before:-cursor paging or a periodic dedup pass).
+
 ## Current status
 
 - [x] Stage 0: Foundation (scaffold, git, deploy skeleton) - done 2026-07-22; Roi manual items
@@ -51,9 +73,12 @@ built-in URL. Flip the flag when Base44 fixes the redirect. itrack.inboxfiles.co
       isolated + functional (B got exactly its own 5 events, 0 of A's; positive control confirms
       subscribe() delivers, so it is not a false pass). PRD risk #2 resolved: subscribe() respects
       RLS, no polling fallback needed.
-- [~] Stage 2: Gmail connector spike - connector pushed, PENDING Roi: create the iTrack Gmail
-      account + authorize (fresh URL below), then rerun `base44 functions deploy` + send the
-      3 test emails
+- [x] Stage 2: Per-user Gmail (app-user connector) LIVE 2026-07-23. Earlier apex-callback block
+      root-caused and fixed app-side (initiate on the app origin, not the SDK's default base44.app
+      apex; see FEEDBACK.md + the RESOLUTION block above). Roi connected roishmuel14@gmail.com
+      (readonly); `syncMyMail` imports real order mail; idempotent (cursor + EmailRecord dedup);
+      `base44 logs` confirm live runs. Remaining for full DoD: two-account isolation via a second
+      Gmail connect (architecturally covered by Stage 1 RLS + per-caller `getCurrentAppUserConnection`).
 - [~] Stage 3: Ingestion pipeline - pipeline + sweep + quarantine DEPLOYED and verified via
       manualAdd on the live app (merge, out-of-order, split, newsletter, monotonicity all pass);
       remaining: live gmail-path tests once the connector is authorized, sweep workflow run in logs

@@ -40,6 +40,19 @@ document wins.
 > Flip the flag to enable Gmail sync when Base44 fixes the connector redirect. All F1-F6/F8-F10
 > functionality is unaffected; only the automatic Gmail *trigger* is deferred.
 
+> **AMENDMENT v1.3 (2026-07-23, later same day): per-user Gmail auto-sync is LIVE; v1.2 reversed.**
+> The v1.2 blocker was misdiagnosed. The connect redirect_uri is not hardcoded: Base44's
+> connect-initiate endpoint mirrors the *request host* into the OAuth callback, and the SDK client
+> defaults its `serverUrl` to the `base44.app` apex, so `connectAppUser` minted an unregisterable
+> callback. Fixed app-side (`src/api/auth.jsx` now calls initiate on `window.location.origin`, whose
+> slug callback is registered); no Base44 change was needed. `GMAIL_CONNECT_ENABLED = true`. Each
+> user connects their OWN Gmail (readonly `gmail.readonly`); `inbox/syncMyMail` reads that user's
+> mailbox request-scoped. Verified end-to-end on the live app (Roi's account: 48 orders imported,
+> idempotent re-sync). Manual add (F9) remains available as an equal path. Root cause + Base44 asks
+> in FEEDBACK.md. (Open Stage-3 quality item, not a connector issue: the merge engine produces
+> ~9 duplicate Order rows and splits orders when the LLM extracts inconsistent merchant names;
+> dedup fix tracked separately.)
+
 ---
 
 ## 1. Overview

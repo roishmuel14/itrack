@@ -52,6 +52,31 @@ export interface CoreInput {
   source: "gmail" | "manual";
 }
 
+// Per-sync-run dedup cache. Base44 entity reads are not guaranteed to reflect a
+// write from a few hundred ms earlier, so two emails about the SAME order
+// processed back-to-back in one syncMyMail run would each miss the other's
+// freshly-created Order and create a duplicate (observed: 10 duplicate order
+// groups, all created 0-1s apart). The batch loop threads this cache so orders
+// and shipments created earlier in the run are immediately visible as merge
+// candidates, independent of read-after-write lag. Manual add passes none.
+export interface RunCache {
+  orders: Array<{
+    id: string;
+    merchant_domain?: string | null;
+    order_number?: string | null;
+    merchant_name?: string | null;
+    ordered_at?: string | null;
+    created_date?: string;
+  }>;
+  shipments: Array<{ id: string; order_id: string; tracking_number?: string | null }>;
+}
+
+function unionById<T extends { id: string }>(dbRows: T[], cacheRows: T[] = []): T[] {
+  if (cacheRows.length === 0) return dbRows;
+  const seen = new Set(dbRows.map((r) => r.id));
+  return dbRows.concat(cacheRows.filter((r) => !seen.has(r.id)) as unknown as T[]);
+}
+
 function snippetOf(text: string): string {
   return text.slice(0, SNIPPET_MAX);
 }
@@ -110,6 +135,7 @@ export async function processOwnedGmailMessage(
   gmailToken: string,
   messageId: string,
   ownerEmail: string,
+  runCache?: RunCache,
 ): Promise<PipelineResult> {
   const service = base44.asServiceRole.entities;
 
@@ -140,7 +166,7 @@ export async function processOwnedGmailMessage(
     gmailMessageId: messageId,
     threadId: msg.threadId,
     source: "gmail",
-  });
+  }, runCache);
 }
 
 // ----------------------------------------------------------------- core path
@@ -148,6 +174,7 @@ export async function processOwnedGmailMessage(
 export async function runCorePipeline(
   base44: Base44Client,
   input: CoreInput,
+  runCache?: RunCache,
 ): Promise<PipelineResult> {
   const service = base44.asServiceRole.entities;
   const plainText = input.text?.trim() ? input.text : htmlToText(input.html);
@@ -184,8 +211,10 @@ export async function runCorePipeline(
     const occurredAt = extraction.event_date ?? input.receivedAt;
 
     // 5. Merge into an Order.
-    const myOrders = await service.Order.filter({ owner_email: input.ownerEmail });
-    const myShipments = await service.Shipment.filter({ owner_email: input.ownerEmail });
+    // Include orders/shipments created earlier in THIS run (read-after-write
+    // lag would otherwise hide them and produce duplicates).
+    const myOrders = unionById(await service.Order.filter({ owner_email: input.ownerEmail }), runCache?.orders);
+    const myShipments = unionById(await service.Shipment.filter({ owner_email: input.ownerEmail }), runCache?.shipments);
     const fuzzy = fuzzyCandidates(
       { merchant_domain: extraction.merchant_domain, occurredAt },
       myOrders,
@@ -277,6 +306,14 @@ export async function runCorePipeline(
         confidence: extraction.confidence,
       });
       orderId = created.id;
+      runCache?.orders.push({
+        id: created.id,
+        merchant_domain: domain ?? null,
+        order_number: extraction.order_number ?? null,
+        merchant_name: extraction.merchant_name ?? null,
+        ordered_at: extraction.classification === "order_confirmation" ? occurredAt : null,
+        created_date: created.created_date ?? input.receivedAt,
+      });
     }
 
     // 6. Shipment upsert by tracking number.
@@ -304,6 +341,11 @@ export async function runCorePipeline(
           status: "shipped",
         });
         shipmentId = created.id;
+        runCache?.shipments.push({
+          id: created.id,
+          order_id: orderId,
+          tracking_number: extraction.tracking_number ?? null,
+        });
       }
     }
 

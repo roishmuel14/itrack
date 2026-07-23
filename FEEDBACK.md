@@ -146,6 +146,40 @@ bugs. On submission day this file becomes the answers to the three required ques
   Base44's side: build the connector redirect_uri from the app's domain (as the login callback
   already does) instead of the hardcoded base44.app apex.
 
+  RESOLUTION 2026-07-23 (root cause found; app-side fix; per-user Gmail now WORKS end-to-end). The
+  redirect_uri is NOT hardcoded - the connect-initiate endpoint MIRRORS THE REQUEST HOST into the
+  OAuth redirect_uri. The trap: the SDK's `createClient` defaults `serverUrl` to the `base44.app`
+  apex and does NOT derive it from `appBaseUrl`, so `base44.connectors.connectAppUser(id)` POSTs
+  `/api/apps/{app}/app-user-auth/connectors/{id}/initiate` to the APEX host, and the server then
+  builds redirect_uri=`https://base44.app/.../callback` (unregisterable). This explains both earlier
+  red herrings: (1) the custom domain didn't help because `appBaseUrl != serverUrl`; (2) our CLI/curl
+  probe looked fine because the CLI's SDK resolved `serverUrl` to the slug and so minted a
+  registerable URL - a FALSE POSITIVE that masked the browser's apex behavior (lesson: reproduce
+  through the actual in-app button, not a CLI proxy). Fix (app-side, shipped in
+  `src/api/auth.jsx`): call the initiate endpoint on the app's OWN origin
+  (`${window.location.origin}/api/apps/{app}/app-user-auth/connectors/{id}/initiate`) with the
+  bearer token, then follow the returned `redirect_url`; the server mirrors the slug/preview/custom
+  host, whose callback IS registered. Verified through the live "Connect Gmail" button: Google
+  consent (readonly) -> callback -> `getCurrentAppUserConnection` -> `syncMyMail` imported 48 orders
+  from Roi's own mailbox. Base44 asks (still valid, so this works out-of-the-box): (a) default the
+  SDK `serverUrl` from `appBaseUrl`, or surface `serverUrl` as a first-class client option; and/or
+  (b) normalize the connect redirect_uri to a registerable host (app.base44.com or the slug) instead
+  of mirroring the bare apex - exactly as the built-in login callback already does.
+
+- 2026-07-23: **Entity reads are not read-your-writes consistent within a sequential function run,
+  which silently produces duplicate rows.** `inbox/syncMyMail` processes messages one-by-one (await
+  each), and each re-`filter`s Orders/Shipments to find its merge target. A row `create`d ~0.3-1s
+  earlier was frequently NOT returned by the next `filter`, so two emails about the same order - and
+  even the same message reprocessed across the frontend's rapid loop of syncMyMail calls - each
+  created a fresh Order + EmailRecord + TrackingEvent. Observed on one real 84-message sync: 10
+  duplicate Order groups (identical merchant+order#, created 0-1s apart), 25 duplicate EmailRecords
+  sharing a gmail_message_id, 18 duplicate TrackingEvents. Repro: `create()` a row then immediately
+  `filter()` for it in the same function - it may be absent. Worked around app-side with a per-run
+  in-memory cache (created rows are unioned into the merge candidates) plus an order-number-only
+  merge key; residual cross-invocation reprocessing (idempotency read-lag across separate calls)
+  remains a known limitation. Ask: document the read-after-write consistency model for entities, or
+  offer a strong-read / read-your-writes option for filter().
+
 - 2026-07-23: **The workflow builder mis-applied a multi-workflow prompt: daily schedules came out
   as 15-minute schedules.** Prompted the dashboard AI (via MCP edit) to create three workflows with
   explicit cadences ("Refund scan ... DAILY at 03:00 UTC", "Daily digest ... DAILY at 07:00 UTC",

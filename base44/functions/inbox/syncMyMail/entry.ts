@@ -12,7 +12,7 @@
 import { createClientFromRequest } from "npm:@base44/sdk";
 import { fail, getUserOrNull, ok, serverError, unauthorized } from "../../../shared/responses.ts";
 import { listMessages } from "../../../shared/gmail.ts";
-import { processOwnedGmailMessage } from "../../../shared/pipeline.ts";
+import { processOwnedGmailMessage, type RunCache } from "../../../shared/pipeline.ts";
 
 const BATCH = 20;
 const OVERLAP_SECONDS = 600;
@@ -58,6 +58,9 @@ Deno.serve(async (req) => {
     const afterEpoch = Math.max(0, Math.floor(sinceMs / 1000) - OVERLAP_SECONDS);
 
     // Page through matches; process up to BATCH non-duplicate messages.
+    // One dedup cache per invocation: orders created earlier in this run stay
+    // visible as merge candidates despite entity read-after-write lag.
+    const runCache: RunCache = { orders: [], shipments: [] };
     const results: Record<string, number> = {};
     let processed = 0;
     let pageToken: string | undefined;
@@ -75,7 +78,7 @@ Deno.serve(async (req) => {
           hasMore = true;
           break;
         }
-        const r = await processOwnedGmailMessage(base44, accessToken, m.id, user.email);
+        const r = await processOwnedGmailMessage(base44, accessToken, m.id, user.email, runCache);
         results[r.status] = (results[r.status] ?? 0) + 1;
         if (r.status !== "duplicate") processed++;
         if (r.status === "failed") {

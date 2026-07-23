@@ -170,6 +170,21 @@ export function decideMerge(
     );
     if (hit) return { kind: "matched_order", orderId: hit.id, via: "order_number" };
   }
+  // Safety net: match on the order number alone when the domain-keyed match
+  // was unavailable (domain missing or extracted inconsistently across a
+  // merchant's emails). Order numbers are high-entropy, so within one user's
+  // orders an exact normalized match is reliable; require >= 5 alphanumerics to
+  // avoid trivial collisions, never cross two DIFFERENT known domains, and defer
+  // to arbitration if more than one candidate shares it.
+  if (orderNo && orderNo.replace(/[^A-Z0-9]/g, "").length >= 5) {
+    const hits = candidates.filter((o) => {
+      if (normalizeOrderNumber(o.order_number) !== orderNo) return false;
+      const od = normalizeDomain(o.merchant_domain);
+      return !od || !domain || od === domain;
+    });
+    if (hits.length === 1) return { kind: "matched_order", orderId: hits[0].id, via: "order_number" };
+    if (hits.length > 1) return { kind: "ambiguous", candidateOrderIds: hits.map((o) => o.id) };
+  }
   const tracking = (facts.tracking_number ?? "").replace(/[\s-]/g, "").toUpperCase();
   if (tracking) {
     const hit = shipments.find(
