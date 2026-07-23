@@ -70,7 +70,11 @@ export function AuthProvider({ children }) {
       loginWithGoogle: () => base44.auth.loginWithProvider('google', window.location.origin),
       loginWithPassword: (email, password) => base44.auth.loginViaEmailPassword(email, password),
       register: (params) => base44.auth.register(params),
+      // SDK contract (auth.js v0.8.3): verifyOtp({ email, otpCode }) posts otp_code.
       verifyOtp: (params) => base44.auth.verifyOtp(params),
+      resendOtp: (email) => base44.auth.resendOtp(email),
+      resetPasswordRequest: (email) => base44.auth.resetPasswordRequest(email),
+      resetPassword: (params) => base44.auth.resetPassword(params),
       logout: () => base44.auth.logout(window.location.origin),
     }),
     [user, settings, gmail, status, refresh],
