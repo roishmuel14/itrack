@@ -10,6 +10,7 @@
     "alias_token":          { "type": "string", "minLength": 8, "description": "THE routing key; 8 lowercase alphanumerics, unique" },
     "digest_enabled":       { "type": "boolean", "default": true },
     "digest_hour_utc":      { "type": "integer", "minimum": 0, "maximum": 23, "default": 7 },
+    "last_digest_date":     { "type": "string", "format": "date", "description": "UTC date of the last digest sent; hard once-per-day guard" },
     "forwarding_confirmed": { "type": "boolean", "default": false }
   },
   "required": ["owner_email", "alias_token"],

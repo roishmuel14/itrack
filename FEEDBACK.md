@@ -75,6 +75,17 @@ bugs. On submission day this file becomes the answers to the three required ques
 
 ## Bugs (with repro)
 
+- 2026-07-23: **The workflow builder mis-applied a multi-workflow prompt: daily schedules came out
+  as 15-minute schedules.** Prompted the dashboard AI (via MCP edit) to create three workflows with
+  explicit cadences ("Refund scan ... DAILY at 03:00 UTC", "Daily digest ... DAILY at 07:00 UTC",
+  "Inbox sweep ... every 15 minutes"). Result observed in function logs: ALL THREE functions fired
+  every ~15 minutes all night (digest/send POSTs at :00/:15/:30/:45 from ~21:00 to 05:00+), which
+  spammed the app owner with ~a dozen identical digest emails until an application-level
+  once-per-day guard was added. A corrective prompt was needed. Two asks: (a) make the workflow
+  builder echo back the parsed trigger spec (name + cadence + timezone) for confirmation before
+  creating, and (b) give workflows a declarative file/CLI write path so cadence is exact by
+  construction (same ask as the workflows_enabled entry above).
+
 - 2026-07-22: Docs page `developers/backend/products/realtime` renders literal placeholder text
   ("Placeholder content for Realtime."). Repro: open the page; expected: realtime docs or a
   redirect to the SDK subscribe reference.

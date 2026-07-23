@@ -31,6 +31,13 @@ Deno.serve(async (req) => {
 
     for (const settings of allSettings) {
       const owner = settings.owner_email;
+      // Hard once-per-day guard: no schedule misconfiguration may ever send
+      // a user more than one digest per UTC day (learned 2026-07-23 when a
+      // workflow fired this every 15 minutes overnight).
+      if (settings.last_digest_date === today) {
+        skipped++;
+        continue;
+      }
       const [orders, refunds] = await Promise.all([
         service.Order.filter({ owner_email: owner, is_archived: false }, undefined, 1000),
         service.RefundOpportunity.filter({ owner_email: owner, status: "detected" }, undefined, 200),
@@ -67,6 +74,7 @@ Deno.serve(async (req) => {
           from_name: "iTrack",
         });
         sent++;
+        await service.UserSettings.update(settings.id, { last_digest_date: today });
       } catch (err) {
         console.log(`digest: send failed for ${owner}:`, err instanceof Error ? err.message : err);
       }
