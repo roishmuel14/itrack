@@ -1,19 +1,28 @@
 # iTrack: your delivery command center
 
-**Connect your Gmail once. See every package you're waiting for, live, and get paid when
+**Drop in an order email. See every package you're waiting for, live, and get paid when
 they're late.**
 
 iTrack turns a messy inbox full of order confirmations, shipping notices, and delivery updates into
-one live dashboard. Each user connects their own Gmail (read-only); every purchase becomes a card
-with product imagery, live status, a progress bar toward the promised date, the full communication
-timeline, and, when a package runs late, a drafted refund claim. A WhatsApp assistant answers
-"where's my order?" from your phone.
+one live dashboard. Add an order by pasting its email (or connecting your Gmail, read-only); every
+purchase becomes a card with product imagery, live status, a progress bar toward the promised date,
+the full communication timeline, and, when a package runs late, a drafted refund claim. A WhatsApp
+assistant answers "where's my order?" from your phone.
 
 Built for the **Base44 Dev Build-Off** (July 2026) on the Base44 developer platform, CLI-first.
 
 - **Live app:** https://i-track-2bdb7160.base44.app
 - **Requirements:** [PRD.md](PRD.md) - **Build log:** [BUILD_PLAN.md](BUILD_PLAN.md) -
   **Platform feedback:** [FEEDBACK.md](FEEDBACK.md)
+
+> **Ingest status:** manual add (paste an order email or a tracking number) is the live ingest
+> path and drives the whole pipeline. Per-user Gmail auto-sync is fully built (`inbox/syncMyMail`
+> + the app-user connector + `GMAIL_CONNECTOR_ID`) but is gated off (`src/lib/config.js`) because
+> Base44's app-user connector hardcodes its OAuth callback to the unregisterable public-suffix
+> apex `base44.app`, so Google refuses the redirect. This is a Base44 platform bug (custom domain
+> does not help; the built-in Google *login* callback handles domains correctly, the connector one
+> does not) reported in [FEEDBACK.md](FEEDBACK.md). Flip one flag to enable Gmail sync the moment
+> Base44 ships the fix.
 
 ## How it works
 

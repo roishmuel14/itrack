@@ -27,6 +27,19 @@ document wins.
 > Everything else (data model minus SyncState/alias fields, merge engine, refund radar, digest,
 > agent, realtime, manual add) stands as written.
 
+> **AMENDMENT v1.2 (2026-07-23, Roi's decision): manual add is the competition ingest path;
+> per-user Gmail auto-sync ships gated-off.** The per-user Gmail OAuth from v1.1 is fully built and
+> tested (`inbox/syncMyMail`, the Base44 app-user Gmail connector, the `GMAIL_CONNECTOR_ID` secret,
+> the Google OAuth client) but cannot complete: Base44's app-user connector hardcodes its OAuth
+> callback to the public-suffix apex `https://base44.app/api/external-auth/callback`, which no
+> Google OAuth client can register (a custom domain, itrack.inboxfiles.com, was set up and did not
+> change it). Confirmed a Base44 platform bug and reported (FEEDBACK.md). Consequence: the
+> `GMAIL_CONNECT_ENABLED` flag in `src/lib/config.js` is `false`; onboarding leads with manual add
+> (F9), which drives the identical parse/merge pipeline, and the Gmail card shows "coming soon".
+> Judges evaluate via the demo account + manual add (already the planned judge path, section 13).
+> Flip the flag to enable Gmail sync when Base44 fixes the connector redirect. All F1-F6/F8-F10
+> functionality is unaffected; only the automatic Gmail *trigger* is deferred.
+
 ---
 
 ## 1. Overview

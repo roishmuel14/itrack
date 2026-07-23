@@ -1,14 +1,17 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, CheckCircle2, ClipboardPaste, Loader2, Lock, Mail, Sparkles } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ClipboardPaste, Clock, Loader2, Lock, Mail, Sparkles } from 'lucide-react';
 import { useAuth } from '@/api/auth';
 import { useGmailSync } from '@/api/useGmailSync';
 import { useToast } from '@/lib/toast';
+import { GMAIL_CONNECT_ENABLED } from '@/lib/config';
 import { Button } from '@/components/ui/button';
 import ManualAddDialog from '@/components/ManualAddDialog';
 
-// Onboarding (per-user OAuth model): connect YOUR Gmail, first sync imports
-// the last 60 days of order emails; or paste an email instead.
+// Onboarding. Manual add is the primary path. The per-user Gmail OAuth card
+// is gated behind GMAIL_CONNECT_ENABLED (currently off: blocked by a Base44
+// connector-redirect bug, see src/lib/config.js) and shows a "coming soon"
+// state until the platform fix lands.
 export default function Onboarding() {
   const { gmail, connectGmail } = useAuth();
   const { sync, syncing, progress } = useGmailSync();
@@ -20,7 +23,7 @@ export default function Onboarding() {
   const startConnect = async () => {
     setConnectBusy(true);
     try {
-      await connectGmail(); // navigates away to Google's consent screen
+      await connectGmail();
     } catch (err) {
       toast.error('Cannot connect Gmail', err?.message ?? 'Try again in a moment.');
       setConnectBusy(false);
@@ -44,39 +47,46 @@ export default function Onboarding() {
       <Link to="/" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground mb-4">
         <ArrowLeft className="w-4 h-4" /> Dashboard
       </Link>
-      <h1 className="text-2xl font-extrabold tracking-tight mb-1">Connect your inbox</h1>
+      <h1 className="text-2xl font-extrabold tracking-tight mb-1">Add your orders</h1>
       <p className="text-muted-foreground mb-6">
-        iTrack reads your own Gmail, finds the order emails, and turns them into live tracking cards.
+        Paste any order or shipping email and iTrack turns it into a live tracking card. Same parser,
+        whether it comes from your inbox or your clipboard.
       </p>
 
       <div className="bg-card rounded-2xl border card-shadow p-6 mb-4">
         <p className="text-sm font-semibold mb-1 flex items-center gap-1.5">
-          <Mail className="w-4 h-4 text-primary" /> Your Gmail, read-only
+          <ClipboardPaste className="w-4 h-4 text-primary" /> Paste an order email
         </p>
         <p className="text-sm text-muted-foreground mb-4">
-          One click, Google's official consent screen, read-only access. iTrack never sends mail,
-          never stores full emails (a short snippet at most), and you can disconnect anytime in Settings.
+          Copy the full text of an order confirmation or shipping notice and drop it in. iTrack reads
+          the merchant, items, dates, and tracking automatically. You can also add a bare tracking
+          number and store.
         </p>
+        <Button onClick={() => setAddOpen(true)} className="h-11">
+          <Sparkles className="w-4 h-4 me-1.5" /> Add an order
+        </Button>
+      </div>
 
-        {!gmail.configured ? (
-          <div className="bg-muted rounded-xl p-4 text-sm text-muted-foreground">
-            Gmail connection is being set up. Meanwhile, paste any order email below and iTrack will
-            track it the same way.
-          </div>
-        ) : gmail.connected ? (
-          <div className="space-y-4">
-            <p className="inline-flex items-center gap-1.5 text-[hsl(var(--status-delivered))] font-medium text-sm">
-              <CheckCircle2 className="w-4 h-4" /> Gmail connected
-            </p>
-            <div>
+      {GMAIL_CONNECT_ENABLED ? (
+        <div className="bg-card rounded-2xl border card-shadow p-6">
+          <p className="text-sm font-semibold mb-1 flex items-center gap-1.5">
+            <Mail className="w-4 h-4 text-primary" /> Your Gmail, read-only
+          </p>
+          <p className="text-sm text-muted-foreground mb-4">
+            One click, Google's official consent screen, read-only access. iTrack never sends mail,
+            never stores full emails, and you can disconnect anytime in Settings.
+          </p>
+          {gmail.connected ? (
+            <div className="space-y-4">
+              <p className="inline-flex items-center gap-1.5 text-[hsl(var(--status-delivered))] font-medium text-sm">
+                <CheckCircle2 className="w-4 h-4" /> Gmail connected
+              </p>
               {syncing ? (
                 <div className="flex items-center gap-3 bg-muted rounded-xl p-4">
                   <Loader2 className="w-5 h-5 animate-spin text-primary" />
                   <div className="text-sm">
                     <p className="font-medium">Scanning your inbox...</p>
-                    <p className="text-muted-foreground">
-                      {progress?.processed ?? 0} order emails imported so far
-                    </p>
+                    <p className="text-muted-foreground">{progress?.processed ?? 0} order emails imported so far</p>
                   </div>
                 </div>
               ) : (
@@ -85,31 +95,32 @@ export default function Onboarding() {
                 </Button>
               )}
             </div>
-          </div>
-        ) : (
-          <Button onClick={startConnect} disabled={connectBusy} className="h-11">
-            {connectBusy ? 'Opening Google...' : 'Connect Gmail'}
-          </Button>
-        )}
-
-        <p className="flex items-start gap-1.5 text-xs text-muted-foreground mt-4">
-          <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          Scope: gmail.readonly. We scan for order-related mail from the last 60 days, then keep an
-          eye out for new updates every time you open iTrack.
-        </p>
-      </div>
-
-      <div className="bg-card rounded-2xl border card-shadow p-6">
-        <p className="text-sm font-semibold mb-1 flex items-center gap-1.5">
-          <ClipboardPaste className="w-4 h-4 text-primary" /> No Gmail? Paste instead
-        </p>
-        <p className="text-sm text-muted-foreground mb-3">
-          Copy any order or shipping email's text and paste it in; the same pipeline reads it.
-        </p>
-        <Button variant="outline" onClick={() => setAddOpen(true)}>
-          Paste an order email
-        </Button>
-      </div>
+          ) : (
+            <Button onClick={startConnect} disabled={connectBusy} className="h-11">
+              {connectBusy ? 'Opening Google...' : 'Connect Gmail'}
+            </Button>
+          )}
+          <p className="flex items-start gap-1.5 text-xs text-muted-foreground mt-4">
+            <Lock className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            Scope: gmail.readonly. We scan for order-related mail from the last 60 days, then keep an
+            eye out for new updates every time you open iTrack.
+          </p>
+        </div>
+      ) : (
+        <div className="bg-card rounded-2xl border card-shadow p-6 opacity-90">
+          <p className="text-sm font-semibold mb-1 flex items-center gap-1.5">
+            <Mail className="w-4 h-4 text-muted-foreground" /> Automatic Gmail sync
+            <span className="ms-1 inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+              <Clock className="w-3 h-3" /> coming soon
+            </span>
+          </p>
+          <p className="text-sm text-muted-foreground">
+            One-click, read-only Gmail connect that scans your last 60 days of order mail is built and
+            ready. It is waiting on a Base44 platform fix for per-user OAuth connectors. Until then,
+            pasting an email above tracks any order in seconds.
+          </p>
+        </div>
+      )}
 
       <ManualAddDialog open={addOpen} onClose={() => setAddOpen(false)} onAdded={() => navigate('/')} />
     </div>

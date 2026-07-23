@@ -5,6 +5,7 @@ import { Order, RefundOpportunity, TrackingEvent, subscribeTo } from '@/api/enti
 import { useAuth } from '@/api/auth';
 import { useGmailSync } from '@/api/useGmailSync';
 import { useToast } from '@/lib/toast';
+import { GMAIL_CONNECT_ENABLED } from '@/lib/config';
 import { Button } from '@/components/ui/button';
 import ManualAddDialog from '@/components/ManualAddDialog';
 import OrderCard from '@/components/OrderCard';
@@ -100,7 +101,7 @@ export default function Dashboard() {
   const { sync, syncing, progress } = useGmailSync();
   const syncedOnce = useRef(false);
   useEffect(() => {
-    if (!gmail.connected || syncedOnce.current) return;
+    if (!GMAIL_CONNECT_ENABLED || !gmail.connected || syncedOnce.current) return;
     syncedOnce.current = true;
     sync().then((res) => {
       if (res.ok && res.processed > 0) {
@@ -157,10 +158,11 @@ export default function Dashboard() {
           </div>
           <h1 className="text-2xl font-extrabold tracking-tight mb-2">Your deliveries, one dashboard</h1>
           <p className="text-muted-foreground mb-8">
-            Connect your Gmail and every order you're waiting for becomes a live tracking card.
+            Paste any order or shipping email and iTrack turns it into a live tracking card, with a
+            progress bar, ETA countdown, and a refund alert if it runs late.
           </p>
           <div className="bg-card rounded-2xl border card-shadow p-6 text-start mb-6">
-            {syncing ? (
+            {GMAIL_CONNECT_ENABLED && syncing ? (
               <div className="flex items-center gap-3">
                 <Loader2 className="w-5 h-5 animate-spin text-primary" />
                 <div className="text-sm">
@@ -168,7 +170,7 @@ export default function Dashboard() {
                   <p className="text-muted-foreground">{progress?.processed ?? 0} order emails imported so far</p>
                 </div>
               </div>
-            ) : gmail.connected ? (
+            ) : GMAIL_CONNECT_ENABLED && gmail.connected ? (
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-sm text-muted-foreground">Gmail is connected. Scan your inbox for orders:</p>
                 <Button onClick={() => sync().then((r) => r.ok && load())}>
@@ -178,17 +180,23 @@ export default function Dashboard() {
             ) : (
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-sm font-semibold flex items-center gap-1.5">
-                  <Mail className="w-4 h-4 text-primary" /> Read-only, one click, disconnect anytime
+                  <Plus className="w-4 h-4 text-primary" /> Add your first order in seconds
                 </p>
-                <Link to="/onboarding">
-                  <Button>Connect Gmail</Button>
-                </Link>
+                <Button onClick={() => setAddOpen(true)}>
+                  <Sparkles className="w-4 h-4 me-1.5" /> Paste an order email
+                </Button>
               </div>
             )}
           </div>
-          <Button variant="outline" onClick={() => setAddOpen(true)}>
-            <Plus className="w-4 h-4 me-1.5" /> Or paste an email instead
-          </Button>
+          {GMAIL_CONNECT_ENABLED ? (
+            <Button variant="outline" onClick={() => setAddOpen(true)}>
+              <Plus className="w-4 h-4 me-1.5" /> Or paste an email instead
+            </Button>
+          ) : (
+            <p className="text-xs text-muted-foreground inline-flex items-center gap-1.5">
+              <Mail className="w-3.5 h-3.5" /> Automatic Gmail sync is coming soon.
+            </p>
+          )}
         </div>
         <ManualAddDialog open={addOpen} onClose={() => setAddOpen(false)} onAdded={() => load()} />
       </>
@@ -255,7 +263,7 @@ export default function Dashboard() {
           ))}
         </div>
         <div className="flex items-center gap-2">
-          {gmail.connected && (
+          {GMAIL_CONNECT_ENABLED && gmail.connected && (
             <Button
               variant="ghost"
               onClick={() => sync().then((r) => r.ok && load(true))}

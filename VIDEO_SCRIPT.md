@@ -10,18 +10,21 @@ Screen: a cluttered Gmail inbox, search "order" showing dozens of merchant email
 > "Every package I'm waiting for lives somewhere in this pile. Amazon, Temu, AliExpress, the local
 > pet-food shop. Finding out what arrives when means digging. So I stopped digging."
 
-## Beat 2: onboarding + the live moment (30-40s)
+## Beat 2: onboarding + the live moment (25-35s)
 
-Screen: iTrack onboarding screen. Click "Connect Gmail", show Google's consent screen (read-only
-scope visible), approve, land back in iTrack.
+Screen: iTrack onboarding "Add your orders". Click "Add an order", paste the full text of a real
+order email into the dialog, click Add.
 
-> "I connect my own Gmail. Read-only, one click, and I can disconnect anytime."
+> "I paste any order email, a confirmation or a shipping notice, and that's it."
 
-Screen: the first-sync progress ("Scanning your inbox... 12 order emails imported"), then the
-dashboard filling with cards live.
+Screen: cut to the dashboard: the card appears live with the product image, merchant, progress bar,
+and countdown.
 
-> "iTrack scans my last 60 days of mail, finds the order emails, and every one becomes a live
-> tracking card: what I bought, where it is, when it lands. No refresh, no setup, no forwarding."
+> "iTrack read the merchant, the items, the total, the promised date, and the tracking number, and
+> turned it into a live card. No setup, no forwarding."
+
+Optional 3s aside (only if you want to mention it): "One-click read-only Gmail sync is built and
+one flag away; it's waiting on a Base44 platform fix for per-user OAuth connectors."
 
 ## Beat 3: card anatomy (15-20s)
 

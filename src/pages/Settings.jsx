@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, Mail } from 'lucide-react';
 import { useAuth } from '@/api/auth';
 import { invokeFunction } from '@/api/functions';
 import { useToast } from '@/lib/toast';
+import { GMAIL_CONNECT_ENABLED } from '@/lib/config';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
@@ -55,7 +56,12 @@ export default function Settings() {
           <p className="text-sm font-semibold mb-2 flex items-center gap-1.5">
             <Mail className="w-4 h-4 text-primary" /> Gmail connection
           </p>
-          {gmail.connected ? (
+          {!GMAIL_CONNECT_ENABLED ? (
+            <p className="text-sm text-muted-foreground">
+              Automatic read-only Gmail sync is coming soon. For now, add orders from the dashboard by
+              pasting an order email or a tracking number.
+            </p>
+          ) : gmail.connected ? (
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <p className="inline-flex items-center gap-1.5 text-sm text-[hsl(var(--status-delivered))] font-medium">
                 <CheckCircle2 className="w-4 h-4" /> Connected (read-only)

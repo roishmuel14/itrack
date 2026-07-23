@@ -27,6 +27,21 @@ first-sync-with-progress; "Inbox sweep" workflow deleted (Refund scan + Daily di
    Note: with the consent screen in Testing mode, ONLY allowlisted test users can connect (judges
    use the demo account + manual add; the video shows the real OAuth flow).
 
+**RESOLUTION 2026-07-23 (all of the above steps 1-5 DONE by Claude in Roi's browser; then BLOCKED
+by a Base44 bug):** Google OAuth Web client "iTrack (Base44 app-user Gmail)" created (project
+gmail-attachment-tool, scopes email+gmail.readonly), Base44 Gmail app-user connector configured
+(connector id 6a61b3f0c8c9d8fba4b414c1), `GMAIL_CONNECTOR_ID` secret set, bootstrap returns
+gmail.configured:true. But Connect Gmail fails: Base44's app-user connector hardcodes the OAuth
+callback to the public-suffix apex `https://base44.app/api/external-auth/callback`, which Google
+refuses to register. Tried the custom-domain fix (Roi's choice): itrack.inboxfiles.com connected
+(CNAME at Namecheap, live + TLS, appBaseUrl repointed, logged in on it) - connector STILL sent the
+apex; the built-in Google LOGIN works on the custom domain, so it's specifically the connector
+callback that's wrong. Reported to Base44 (FEEDBACK.md). **Decision (Roi): manual add is the
+competition ingest path** (PRD amendment v1.2). `GMAIL_CONNECT_ENABLED=false` in src/lib/config.js;
+onboarding leads with manual add; Gmail card shows "coming soon"; appBaseUrl reverted to the stable
+built-in URL. Flip the flag when Base44 fixes the redirect. itrack.inboxfiles.com stays connected
+(works, nicer URL) but is not relied on.
+
 ## Current status
 
 - [x] Stage 0: Foundation (scaffold, git, deploy skeleton) - done 2026-07-22; Roi manual items
