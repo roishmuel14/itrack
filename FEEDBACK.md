@@ -96,6 +96,22 @@ bugs. On submission day this file becomes the answers to the three required ques
   the modal advertises, OR (b) if a custom domain is truly required, say so in the modal and the
   Gmail-connector docs and stop listing slug URIs that won't be used.
 
+  UPDATE 2026-07-23 (definitive, after trying the custom-domain fix): **a custom domain does NOT
+  fix it.** Connected a verified-serving custom domain (itrack.inboxfiles.com, CNAME ->
+  base44.onrender.com, HTTP 200 + valid cert), set the SDK `appBaseUrl` to it, redeployed, logged in
+  ON the custom domain, and clicked Connect Gmail: the connector STILL sent
+  redirect_uri=`https://base44.app/api/external-auth/callback` (the bare apex), identical to the
+  base44.app-served attempt. So the connector redirect_uri is HARDCODED to the apex regardless of
+  the app's built-in URL, custom domain, or appBaseUrl. Crucially, on the SAME custom domain the
+  built-in Google **login** (loginWithProvider) worked flawlessly - it used
+  `https://app.base44.com/api/apps/auth/callback` with the app domain carried in `state`
+  (`state.domain=https://itrack.inboxfiles.com`). So Base44 already has the correct pattern for the
+  login callback; the app-user **connector** callback just doesn't use it. Net: BYO per-user Gmail
+  (or any app-user OAuth connector) is currently IMPOSSIBLE on Base44 with a custom Google client,
+  because the one redirect_uri it emits can never be registered in Google. Fix is one-line on
+  Base44's side: build the connector redirect_uri from the app's domain (as the login callback
+  already does) instead of the hardcoded base44.app apex.
+
 - 2026-07-23: **The workflow builder mis-applied a multi-workflow prompt: daily schedules came out
   as 15-minute schedules.** Prompted the dashboard AI (via MCP edit) to create three workflows with
   explicit cadences ("Refund scan ... DAILY at 03:00 UTC", "Daily digest ... DAILY at 07:00 UTC",
