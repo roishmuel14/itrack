@@ -18,8 +18,15 @@ export function useGmailSync({ onBatch } = {}) {
       let total = { processed: 0, scanned: 0 };
       let rounds = 0;
       let pageToken = null;
+      // Echoed with page_token so the server reuses the SAME after: bound all
+      // session (a Gmail pageToken is only valid for the exact query, and on
+      // first syncs the bound would otherwise drift with the server clock).
+      let after = null;
       while (hasMore && rounds < 30) {
-        const res = await invokeFunction('inbox/syncMyMail', pageToken ? { page_token: pageToken } : {});
+        const res = await invokeFunction(
+          'inbox/syncMyMail',
+          pageToken ? { page_token: pageToken, after } : {},
+        );
         const batchProcessed = Object.entries(res.results ?? {})
           .filter(([k]) => k !== 'duplicate')
           .reduce((sum, [, v]) => sum + v, 0);
@@ -30,6 +37,7 @@ export function useGmailSync({ onBatch } = {}) {
         setProgress(total);
         onBatch?.(res);
         pageToken = res.next_page_token ?? null;
+        after = typeof res.after === 'number' ? res.after : null;
         hasMore = res.has_more === true;
         rounds++;
       }

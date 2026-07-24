@@ -16,10 +16,9 @@ import { createClientFromRequest } from "npm:@base44/sdk";
 import { fail, getUserOrNull, ok, serverError, unauthorized } from "../../../shared/responses.ts";
 import { listMessages } from "../../../shared/gmail.ts";
 import { processOwnedGmailMessage, type RunCache } from "../../../shared/pipeline.ts";
+import { resolveAfterEpoch } from "../../../shared/syncWindow.ts";
 
 const BATCH = 20;
-const OVERLAP_SECONDS = 600;
-const FIRST_SYNC_LOOKBACK_DAYS = 60;
 
 // Recall-oriented Gmail search: the LLM classifier is the precision filter,
 // manual add is the net for anything this misses.
@@ -49,12 +48,16 @@ Deno.serve(async (req) => {
       ]);
     }
 
-    // The frontend echoes next_page_token back so we continue Gmail's own
-    // pagination across calls instead of restarting from the cursor each time.
+    // The frontend echoes next_page_token AND the after bound back so paging
+    // continues with a STABLE query: a Gmail pageToken is only valid for the
+    // exact q that issued it, and on first syncs the bound would otherwise
+    // drift with Date.now() between rounds and invalidate the token.
     let reqPageToken: string | undefined;
+    let echoedAfter: number | undefined;
     try {
       const body = await req.json();
       if (body && typeof body.page_token === "string" && body.page_token) reqPageToken = body.page_token;
+      if (body && typeof body.after === "number") echoedAfter = body.after;
     } catch (_) {
       // no / empty body: start a fresh page
     }
@@ -64,11 +67,12 @@ Deno.serve(async (req) => {
     const settings = settingsRows[0] ?? null;
 
     const now = Date.now();
-    const lastSyncMs = settings?.last_gmail_sync_at ? Date.parse(settings.last_gmail_sync_at) : NaN;
-    const sinceMs = Number.isNaN(lastSyncMs)
-      ? now - FIRST_SYNC_LOOKBACK_DAYS * 24 * 3600 * 1000
-      : lastSyncMs;
-    const afterEpoch = Math.max(0, Math.floor(sinceMs / 1000) - OVERLAP_SECONDS);
+    const afterEpoch = resolveAfterEpoch({
+      lastSyncAt: settings?.last_gmail_sync_at,
+      nowMs: now,
+      echoedAfter,
+      hasPageToken: !!reqPageToken,
+    });
 
     // One dedup cache per invocation: orders created earlier in this page stay
     // visible as merge candidates despite entity read-after-write lag.
@@ -104,7 +108,15 @@ Deno.serve(async (req) => {
     console.log(
       `syncMyMail ${user.email}: scanned=${scanned} ${JSON.stringify(results)} has_more=${hasMore}`,
     );
-    return ok({ ok: true, scanned, results, has_more: hasMore, next_page_token: nextPageToken ?? null });
+    return ok({
+      ok: true,
+      scanned,
+      results,
+      has_more: hasMore,
+      next_page_token: nextPageToken ?? null,
+      // Echoed back by the frontend with next_page_token to keep q stable.
+      after: afterEpoch,
+    });
   } catch (err) {
     return serverError(err);
   }
