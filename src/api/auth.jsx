@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import { APP_ID, base44 } from '@/api/base44Client';
 import { invokeFunction } from '@/api/functions';
 
 // Auth + first-load bootstrap. bootstrap returns the user's settings AND the
@@ -59,8 +59,22 @@ export function AuthProvider({ children }) {
       setSettings,
       connectGmail: async () => {
         if (!gmail.connector_id) throw new Error('Gmail connection is not configured yet');
-        const redirectUrl = await base44.connectors.connectAppUser(gmail.connector_id);
-        window.location.href = redirectUrl;
+        // Initiate on the app's own origin, not through the SDK client: the SDK
+        // defaults serverUrl to the base44.app apex and the server mirrors the
+        // request host into the OAuth redirect_uri, which Google rejects (the
+        // apex is on the Public Suffix List and unregisterable). The app
+        // origin's callback (live/preview/custom) IS registered on the Google
+        // client. Verified 2026-07-23; see FEEDBACK.md.
+        const token = localStorage.getItem('base44_access_token');
+        const res = await fetch(
+          `${window.location.origin}/api/apps/${APP_ID}/app-user-auth/connectors/${gmail.connector_id}/initiate`,
+          { method: 'POST', headers: { Authorization: `Bearer ${token}` } },
+        );
+        const data = res.ok ? await res.json().catch(() => null) : null;
+        if (!data?.redirect_url) {
+          throw new Error('Could not start the Google consent flow. Sign in again and retry.');
+        }
+        window.location.href = data.redirect_url;
       },
       disconnectGmail: async () => {
         if (!gmail.connector_id) return;

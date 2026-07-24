@@ -5,18 +5,20 @@
 // while the app is open.
 //
 // Incremental: queries mail after (last_gmail_sync_at - overlap), first sync
-// looks back 60 days. Batched: at most BATCH messages per invocation; returns
-// has_more so the frontend loops with visible progress. Idempotent per
-// (owner, message id), so overlaps and loops are free.
+// looks back 60 days. One Gmail page (<= BATCH messages) per invocation; the
+// frontend loops, echoing next_page_token, so successive calls page through
+// strictly older mail and NEVER re-list what a prior call already handled.
+// (Re-listing from a fixed cursor + entity read-after-write lag used to
+// reprocess messages into duplicate rows across the frontend's loop.)
+// Idempotent per (owner, message id) as a belt-and-braces net for the overlap.
 
 import { createClientFromRequest } from "npm:@base44/sdk";
 import { fail, getUserOrNull, ok, serverError, unauthorized } from "../../../shared/responses.ts";
 import { listMessages } from "../../../shared/gmail.ts";
-import { processOwnedGmailMessage } from "../../../shared/pipeline.ts";
+import { processOwnedGmailMessage, type RunCache } from "../../../shared/pipeline.ts";
+import { resolveAfterEpoch } from "../../../shared/syncWindow.ts";
 
 const BATCH = 20;
-const OVERLAP_SECONDS = 600;
-const FIRST_SYNC_LOOKBACK_DAYS = 60;
 
 // Recall-oriented Gmail search: the LLM classifier is the precision filter,
 // manual add is the net for anything this misses.
@@ -46,46 +48,59 @@ Deno.serve(async (req) => {
       ]);
     }
 
+    // The frontend echoes next_page_token AND the after bound back so paging
+    // continues with a STABLE query: a Gmail pageToken is only valid for the
+    // exact q that issued it, and on first syncs the bound would otherwise
+    // drift with Date.now() between rounds and invalidate the token.
+    let reqPageToken: string | undefined;
+    let echoedAfter: number | undefined;
+    try {
+      const body = await req.json();
+      if (body && typeof body.page_token === "string" && body.page_token) reqPageToken = body.page_token;
+      if (body && typeof body.after === "number") echoedAfter = body.after;
+    } catch (_) {
+      // no / empty body: start a fresh page
+    }
+
     const service = base44.asServiceRole.entities;
     const settingsRows = await service.UserSettings.filter({ owner_email: user.email });
     const settings = settingsRows[0] ?? null;
 
     const now = Date.now();
-    const lastSyncMs = settings?.last_gmail_sync_at ? Date.parse(settings.last_gmail_sync_at) : NaN;
-    const sinceMs = Number.isNaN(lastSyncMs)
-      ? now - FIRST_SYNC_LOOKBACK_DAYS * 24 * 3600 * 1000
-      : lastSyncMs;
-    const afterEpoch = Math.max(0, Math.floor(sinceMs / 1000) - OVERLAP_SECONDS);
+    const afterEpoch = resolveAfterEpoch({
+      lastSyncAt: settings?.last_gmail_sync_at,
+      nowMs: now,
+      echoedAfter,
+      hasPageToken: !!reqPageToken,
+    });
 
-    // Page through matches; process up to BATCH non-duplicate messages.
+    // One dedup cache per invocation: orders created earlier in this page stay
+    // visible as merge candidates despite entity read-after-write lag.
+    const runCache: RunCache = { orders: [], shipments: [] };
     const results: Record<string, number> = {};
-    let processed = 0;
-    let pageToken: string | undefined;
-    let hasMore = false;
     let scanned = 0;
-    do {
-      const page = await listMessages(accessToken, {
-        q: `after:${afterEpoch} ${ORDER_QUERY}`,
-        maxResults: 50,
-        pageToken,
-      });
-      for (const m of page.messages) {
-        scanned++;
-        if (processed >= BATCH) {
-          hasMore = true;
-          break;
-        }
-        const r = await processOwnedGmailMessage(base44, accessToken, m.id, user.email);
-        results[r.status] = (results[r.status] ?? 0) + 1;
-        if (r.status !== "duplicate") processed++;
-        if (r.status === "failed") {
-          console.log(`syncMyMail ${user.email} msg=${m.id} failed: ${r.detail ?? ""}`);
-        }
-      }
-      pageToken = hasMore ? undefined : page.nextPageToken;
-    } while (pageToken);
 
-    // Advance the cursor only when this run drained everything it found.
+    // Exactly one Gmail page per call (maxResults bounds per-call LLM work). The
+    // frontend loops on next_page_token, so each call advances to older mail and
+    // never re-lists what an earlier call already processed.
+    const page = await listMessages(accessToken, {
+      q: `after:${afterEpoch} ${ORDER_QUERY}`,
+      maxResults: BATCH,
+      pageToken: reqPageToken,
+    });
+    for (const m of page.messages) {
+      scanned++;
+      const r = await processOwnedGmailMessage(base44, accessToken, m.id, user.email, runCache);
+      results[r.status] = (results[r.status] ?? 0) + 1;
+      if (r.status === "failed") {
+        console.log(`syncMyMail ${user.email} msg=${m.id} failed: ${r.detail ?? ""}`);
+      }
+    }
+    const nextPageToken = page.nextPageToken;
+    const hasMore = !!nextPageToken;
+
+    // Advance the persistent high-water mark only when the result set is fully
+    // drained (Gmail returned no next page). Until then we keep paging.
     const patch: Record<string, unknown> = { gmail_connected: true };
     if (!hasMore) patch.last_gmail_sync_at = new Date(now).toISOString();
     if (settings) await service.UserSettings.update(settings.id, patch);
@@ -93,7 +108,15 @@ Deno.serve(async (req) => {
     console.log(
       `syncMyMail ${user.email}: scanned=${scanned} ${JSON.stringify(results)} has_more=${hasMore}`,
     );
-    return ok({ ok: true, scanned, results, has_more: hasMore });
+    return ok({
+      ok: true,
+      scanned,
+      results,
+      has_more: hasMore,
+      next_page_token: nextPageToken ?? null,
+      // Echoed back by the frontend with next_page_token to keep q stable.
+      after: afterEpoch,
+    });
   } catch (err) {
     return serverError(err);
   }
