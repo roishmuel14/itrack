@@ -23,7 +23,9 @@ import {
   type StatusSignal,
 } from "./mergeEngine.ts";
 import { resolveCarrier } from "./carriers.ts";
-import { rehostImage, rehostMerchantLogo } from "./rehost.ts";
+import { rehostImage } from "./rehost.ts";
+import { resolveAndRehostLogo } from "./merchantLogo.ts";
+import { domainFromSender } from "./senderDomain.ts";
 import { getMessage } from "./gmail.ts";
 
 // deno-lint-ignore no-explicit-any
@@ -32,6 +34,45 @@ type Base44Client = any;
 const SNIPPET_MAX = 1990;
 const MAX_REHOSTED_IMAGES = 3;
 const LOW_CONFIDENCE = 0.6;
+
+interface OrderItem {
+  name?: string;
+  qty?: number;
+  price?: number;
+  image_url?: string;
+}
+
+// Fill gaps in an existing item list from a later, richer email. Deliberately
+// never adds or removes items: a shipping confirmation that lists 1 of 3 shipped
+// items must not truncate the order it merged into.
+export function mergeItems(
+  existing: OrderItem[],
+  incoming: OrderItem[],
+): { items: OrderItem[]; changed: boolean } {
+  if (existing.length === 0) return { items: incoming, changed: incoming.length > 0 };
+  const key = (n?: string) => (n ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const byName = new Map(incoming.map((i) => [key(i.name), i]));
+  let changed = false;
+  const items = existing.map((e) => {
+    const inc = byName.get(key(e.name));
+    if (!inc) return e;
+    const next = { ...e };
+    if (!e.image_url && inc.image_url) {
+      next.image_url = inc.image_url;
+      changed = true;
+    }
+    if (e.price == null && inc.price != null) {
+      next.price = inc.price;
+      changed = true;
+    }
+    if ((e.qty ?? 1) === 1 && (inc.qty ?? 1) > 1) {
+      next.qty = inc.qty;
+      changed = true;
+    }
+    return next;
+  });
+  return { items, changed };
+}
 
 export interface PipelineResult {
   status: "processed" | "duplicate" | "irrelevant" | "unroutable" | "failed";
@@ -271,10 +312,16 @@ export async function runCorePipeline(
       });
     }
 
+    // Logo lookup domain. Kept SEPARATE from merchant_domain on purpose: that
+    // field is half the merge key and drives fuzzyCandidates, so a guessed value
+    // there would change matching for every future email.
+    const senderDomain = domainFromSender(input.from, { ownerEmail: input.ownerEmail }).domain;
+
     let orderId: string;
     if (decision.kind === "matched_order") {
       orderId = decision.orderId;
-      const order = myOrders.find((o: any) => o.id === orderId)!;
+      // deno-lint-ignore no-explicit-any
+      const order: any = myOrders.find((o: any) => o.id === orderId)!;
       // Fill gaps; never blank existing values with nulls.
       const patch: Record<string, unknown> = {};
       if (!order.order_number && extraction.order_number) patch.order_number = extraction.order_number;
@@ -285,16 +332,42 @@ export async function runCorePipeline(
       if (extraction.eta_date) patch.eta_date = extraction.eta_date;
       if (order.total == null && extraction.total != null) patch.total = extraction.total;
       if (extraction.currency && !order.currency) patch.currency = extraction.currency;
-      if ((order.items ?? []).length === 0 && items.length > 0) patch.items = items;
+      if (items.length > 0) {
+        // A later, richer email can now fill in images the first one missed.
+        const merged = mergeItems(order.items ?? [], items);
+        if (merged.changed) patch.items = merged.items;
+      }
+      const logoDomain = normalizeDomain(order.merchant_domain) ||
+        normalizeDomain(order.logo_domain) ||
+        normalizeDomain(extraction.merchant_domain) ||
+        senderDomain ||
+        "";
+      if (!order.logo_domain && logoDomain) patch.logo_domain = logoDomain;
+      // Backfill the logo when this order never got one (first email had no
+      // domain, or the fetch failed back then).
+      if (!order.logo_url && logoDomain) {
+        const resolved = await resolveAndRehostLogo(base44, logoDomain);
+        if (resolved) {
+          patch.logo_url = resolved.url;
+          patch.logo_source = resolved.source;
+          patch.logo_width = resolved.width;
+        }
+        patch.logo_checked_at = new Date().toISOString();
+      }
       if (Object.keys(patch).length > 0) await service.Order.update(orderId, patch);
     } else {
       const domain = normalizeDomain(extraction.merchant_domain) || undefined;
-      const logoUrl = domain ? await rehostMerchantLogo(base44, domain) : null;
+      const logoDomain = domain || senderDomain || "";
+      const resolved = logoDomain ? await resolveAndRehostLogo(base44, logoDomain) : null;
       const created = await service.Order.create({
         owner_email: input.ownerEmail,
         merchant_name: extraction.merchant_name ?? "Unknown merchant",
         merchant_domain: domain,
-        logo_url: logoUrl ?? undefined,
+        logo_domain: logoDomain || undefined,
+        logo_url: resolved?.url ?? undefined,
+        logo_source: resolved?.source ?? undefined,
+        logo_width: resolved?.width ?? undefined,
+        logo_checked_at: logoDomain ? new Date().toISOString() : undefined,
         order_number: extraction.order_number ?? undefined,
         ordered_at: extraction.classification === "order_confirmation" ? occurredAt : undefined,
         currency: extraction.currency ?? "USD",
