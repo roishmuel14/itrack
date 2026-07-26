@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, Mail } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Image as ImageIcon, Mail } from 'lucide-react';
 import { useAuth } from '@/api/auth';
 import { invokeFunction } from '@/api/functions';
 import { useToast } from '@/lib/toast';
@@ -14,6 +14,8 @@ export default function Settings() {
   const [busy, setBusy] = useState(false);
   const [wipeOpen, setWipeOpen] = useState(false);
   const [wipeText, setWipeText] = useState('');
+  const [logoBusy, setLogoBusy] = useState(false);
+  const [logoProgress, setLogoProgress] = useState(null);
 
   const saveDigest = async (patch) => {
     setBusy(true);
@@ -25,6 +27,33 @@ export default function Settings() {
       toast.notifyError(err, 'Cannot save settings');
     } finally {
       setBusy(false);
+    }
+  };
+
+  // The function is bounded per call so it cannot time out, so loop until it
+  // reports nothing left. Stop on zero progress too: rows inside their recheck
+  // cooldown keep `remaining` positive and would otherwise spin forever.
+  const refreshLogos = async () => {
+    setLogoBusy(true);
+    let processed = 0;
+    let updated = 0;
+    try {
+      for (let round = 0; round < 25; round++) {
+        const res = await invokeFunction('orders/backfillImages', {});
+        processed += res.processed ?? 0;
+        updated += res.updated ?? 0;
+        setLogoProgress({ processed, updated });
+        if (!res.has_more || (res.processed ?? 0) === 0) break;
+      }
+      toast.success(
+        updated > 0 ? `Updated ${updated} logo${updated === 1 ? '' : 's'}` : 'Logos are already up to date',
+        updated > 0 ? 'Your cards should look sharper now.' : undefined,
+      );
+    } catch (err) {
+      toast.notifyError(err, 'Cannot refresh logos');
+    } finally {
+      setLogoBusy(false);
+      setLogoProgress(null);
     }
   };
 
@@ -89,6 +118,23 @@ export default function Settings() {
               </Link>
             </div>
           )}
+        </div>
+      </div>
+
+      <div className="bg-card rounded-2xl border card-shadow p-5 mb-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <p className="font-semibold text-sm">Merchant logos</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Fetches each store's own icon at full resolution for orders that have no logo or a blurry one.
+            </p>
+          </div>
+          <Button variant="outline" onClick={refreshLogos} disabled={logoBusy}>
+            <ImageIcon className="w-4 h-4 me-1.5" />
+            {logoBusy
+              ? `Refreshing${logoProgress ? ` (${logoProgress.updated}/${logoProgress.processed})` : ''}...`
+              : 'Refresh logos'}
+          </Button>
         </div>
       </div>
 

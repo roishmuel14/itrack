@@ -4,6 +4,7 @@ import { ChevronDown, Loader2, Mail, Plus, PackageOpen, RefreshCw, Sparkles } fr
 import { Order, RefundOpportunity, TrackingEvent, subscribeTo } from '@/api/entities';
 import { useAuth } from '@/api/auth';
 import { useGmailSync } from '@/api/useGmailSync';
+import { invokeFunction } from '@/api/functions';
 import { useToast } from '@/lib/toast';
 import { GMAIL_CONNECT_ENABLED } from '@/lib/config';
 import { Button } from '@/components/ui/button';
@@ -48,6 +49,7 @@ export default function Dashboard() {
   const [filter, setFilter] = useState('all');
   const [showDelivered, setShowDelivered] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [completingId, setCompletingId] = useState(null);
   const reloadTimer = useRef(null);
 
   const load = useCallback(async (silent = false) => {
@@ -72,6 +74,22 @@ export default function Dashboard() {
       }
     }
   }, []);
+
+  // Same server-side state authority as the detail page: the function owns the
+  // transition, we just reflect it. Realtime also refreshes the grid, but we
+  // reload so the card moves the moment the call returns.
+  const markDelivered = useCallback(async (order) => {
+    setCompletingId(order.id);
+    try {
+      await invokeFunction('orders/setStatus', { order_id: order.id, action: 'mark_delivered' });
+      toast.success('Marked delivered', 'Nice, another one home.');
+      await load(true);
+    } catch (err) {
+      toast.notifyError(err, 'Cannot update order');
+    } finally {
+      setCompletingId(null);
+    }
+  }, [load, toast]);
 
   useEffect(() => {
     load();
@@ -290,7 +308,13 @@ export default function Dashboard() {
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {visible.map((o) => (
-                <OrderCard key={o.id} order={o} refundCount={refundsByOrder[o.id] ?? 0} />
+                <OrderCard
+                  key={o.id}
+                  order={o}
+                  refundCount={refundsByOrder[o.id] ?? 0}
+                  onMarkDelivered={markDelivered}
+                  busy={completingId === o.id}
+                />
               ))}
             </div>
           )}

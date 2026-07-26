@@ -1,6 +1,9 @@
 import { Link } from 'react-router-dom';
-import { Package, BadgePercent, AlertCircle } from 'lucide-react';
+import { BadgePercent, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 import { countdownText, daysUntil, formatMoney, progressPercent, statusChip } from '@/lib/format';
+import MerchantImage, { MerchantLogo } from '@/components/MerchantImage';
+
+const DONE_STATUSES = ['delivered', 'cancelled', 'returned'];
 
 function ProgressBar({ order }) {
   const pct = progressPercent(order.ordered_at, order.promised_date);
@@ -39,30 +42,52 @@ function ProgressBar({ order }) {
   );
 }
 
-export default function OrderCard({ order, refundCount = 0 }) {
+export default function OrderCard({ order, refundCount = 0, onMarkDelivered, busy = false }) {
   const chip = statusChip(order.status);
-  const overdue = !['delivered', 'cancelled', 'returned'].includes(order.status) && (daysUntil(order.promised_date) ?? 1) < 0;
-  const firstImage = (order.items ?? []).find((i) => i.image_url)?.image_url;
+  const overdue = !DONE_STATUSES.includes(order.status) && (daysUntil(order.promised_date) ?? 1) < 0;
   const itemsSummary = (order.items ?? []).map((i) => (i.qty > 1 ? `${i.qty}x ${i.name}` : i.name)).join(', ');
+  const canComplete = Boolean(onMarkDelivered) && !DONE_STATUSES.includes(order.status);
 
   return (
-    <Link
-      to={`/orders/${order.id}`}
-      className={`block bg-card rounded-2xl border card-shadow hover:card-shadow-hover transition-shadow overflow-hidden ${
+    // Stretched-link pattern: the whole card is clickable via the absolutely
+    // positioned <Link>, which keeps the action button a sibling rather than a
+    // button nested inside an anchor.
+    <div
+      className={`relative bg-card rounded-2xl border card-shadow hover:card-shadow-hover transition-shadow overflow-hidden ${
         overdue ? 'border-[hsl(var(--status-overdue))]/40 ring-1 ring-[hsl(var(--status-overdue))]/30' : ''
       }`}
     >
-      <div className="h-36 bg-muted grid place-items-center overflow-hidden">
-        {firstImage ? (
-          <img src={firstImage} alt="" className="w-full h-full object-cover" loading="lazy" />
-        ) : (
-          <Package className="w-10 h-10 text-muted-foreground/40" />
-        )}
-      </div>
-      <div className="p-4">
+      <Link
+        to={`/orders/${order.id}`}
+        className="absolute inset-0 z-0 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      >
+        <span className="sr-only">{`Open order from ${order.merchant_name}`}</span>
+      </Link>
+
+      <MerchantImage order={order} className="h-36 pointer-events-none" />
+
+      {canComplete && (
+        <button
+          type="button"
+          onClick={() => onMarkDelivered(order)}
+          disabled={busy}
+          aria-label={`Mark order from ${order.merchant_name} as delivered`}
+          title="Mark delivered"
+          className="absolute top-2 end-2 z-10 inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-full bg-card/95 backdrop-blur border card-shadow text-foreground hover:bg-[hsl(var(--status-delivered-bg))] hover:text-[hsl(var(--status-delivered))] disabled:opacity-60 transition-colors"
+        >
+          {busy ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <CheckCircle2 className="w-3.5 h-3.5 text-[hsl(var(--status-delivered))]" />
+          )}
+          Delivered
+        </button>
+      )}
+
+      <div className="p-4 pointer-events-none">
         <div className="flex items-center justify-between gap-2 mb-1">
           <div className="flex items-center gap-2 min-w-0">
-            {order.logo_url && <img src={order.logo_url} alt="" className="w-5 h-5 rounded shrink-0" loading="lazy" />}
+            <MerchantLogo order={order} size={20} />
             <p className="font-semibold truncate">{order.merchant_name}</p>
           </div>
           <span className={`text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap ${chip.className}`}>{chip.label}</span>
@@ -85,6 +110,6 @@ export default function OrderCard({ order, refundCount = 0 }) {
         </div>
         <ProgressBar order={order} />
       </div>
-    </Link>
+    </div>
   );
 }
