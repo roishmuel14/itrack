@@ -1,7 +1,8 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/api/auth';
 import { ToastProvider } from '@/lib/toast';
 import AppShell from '@/components/layout/AppShell';
+import Landing from '@/pages/Landing';
 import Login from '@/pages/Login';
 import Dashboard from '@/pages/Dashboard';
 import OrderDetail from '@/pages/OrderDetail';
@@ -19,8 +20,16 @@ function FullScreenSpinner() {
 
 function Gate() {
   const { status } = useAuth();
+  const location = useLocation();
   if (status === 'loading') return <FullScreenSpinner />;
-  if (status === 'anonymous') return <Login />;
+  if (status === 'anonymous') {
+    // Password-reset emails land on "/" with a token in the query string;
+    // those visitors need the auth screen, not marketing.
+    const params = new URLSearchParams(location.search);
+    const hasResetToken = params.has('reset_token') || params.has('token');
+    if (location.pathname === '/' && !hasResetToken) return <Landing />;
+    return <Login />;
+  }
   return <AppShell />;
 }
 
