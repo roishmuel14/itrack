@@ -109,7 +109,7 @@ export interface RunCache {
     ordered_at?: string | null;
     created_date?: string;
   }>;
-  shipments: Array<{ id: string; order_id: string; tracking_number?: string | null }>;
+  shipments: Array<{ id: string; order_id: string; tracking_number?: string | null; carrier?: string | null }>;
 }
 
 function unionById<T extends { id: string }>(dbRows: T[], cacheRows: T[] = []): T[] {
@@ -152,7 +152,7 @@ function signalsFromEvents(events: Array<{ type: string; occurred_at: string }>)
 }
 
 function orderSummaryFor(o: {
-  merchant_name?: string;
+  merchant_name?: string | null;
   order_number?: string | null;
   total?: number | null;
   currency?: string | null;
