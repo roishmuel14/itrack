@@ -15,7 +15,8 @@ and the shared connector are DELETED (code + remote); bootstrap no longer issues
 reports Gmail connection state; onboarding/dashboard/settings rebuilt around Connect Gmail ->
 first-sync-with-progress; "Inbox sweep" workflow deleted (Refund scan + Daily digest stay).
 
-**ROI MANUAL (the new, smaller list - no new Gmail account needed):**
+**ROI MANUAL (the new, smaller list - no new Gmail account needed). ALL 5 STEPS DONE 2026-07-23;
+kept as the reproduction recipe for a fresh environment:**
 1. Google Cloud Console: create an OAuth consent screen (External, **Testing** mode), add scope
    `gmail.readonly`, add test users: roishmuel14@gmail.com + the demo/test accounts.
 2. Create an OAuth Client (type: Web application). The redirect URIs to paste come from Base44:
@@ -28,7 +29,9 @@ first-sync-with-progress; "Inbox sweep" workflow deleted (Refund scan + Daily di
    use the demo account + manual add; the video shows the real OAuth flow).
 
 **RESOLUTION 2026-07-23 (all of the above steps 1-5 DONE by Claude in Roi's browser; then BLOCKED
-by a Base44 bug):** Google OAuth Web client "iTrack (Base44 app-user Gmail)" created (project
+by a Base44 bug).** SUPERSEDED THE SAME DAY - the "Base44 bug" diagnosis was WRONG and the flag is
+now `true`; read the next section before acting on anything in this paragraph. Kept for the
+debugging trail: Google OAuth Web client "iTrack (Base44 app-user Gmail)" created (project
 gmail-attachment-tool, scopes email+gmail.readonly), Base44 Gmail app-user connector configured
 (connector id 6a61b3f0c8c9d8fba4b414c1), `GMAIL_CONNECTOR_ID` secret set, bootstrap returns
 gmail.configured:true. But Connect Gmail fails: Base44's app-user connector hardcodes the OAuth
@@ -69,22 +72,28 @@ in FEEDBACK.md.
 
 ## Current status
 
-- [x] Stage 0: Foundation (scaffold, git, deploy skeleton) - done 2026-07-22; Roi manual items
-      (enroll, iTrack Gmail account, Builder+ confirm) still pending, gate stage 2
+- [x] Stage 0: Foundation (scaffold, git, deploy skeleton) - done 2026-07-22. The "iTrack Gmail
+      account" item is RETIRED by the per-user-OAuth pivot and no longer gates stage 2 (done);
+      enroll + Builder+ confirm remain as Roi manual items for stage 8.
 - [x] Stage 1: Data layer - COMPLETE 2026-07-23. Two-account leak test PASSED on the live app:
       reads isolated (B sees 0 of A's 6 orders, 0 foreign in every per-user entity) AND realtime
       isolated + functional (B got exactly its own 5 events, 0 of A's; positive control confirms
       subscribe() delivers, so it is not a false pass). PRD risk #2 resolved: subscribe() respects
       RLS, no polling fallback needed.
-- [x] Stage 2: Per-user Gmail (app-user connector) LIVE 2026-07-23. Earlier apex-callback block
-      root-caused and fixed app-side (initiate on the app origin, not the SDK's default base44.app
-      apex; see FEEDBACK.md + the RESOLUTION block above). Roi connected roishmuel14@gmail.com
-      (readonly); `syncMyMail` imports real order mail; idempotent (cursor + EmailRecord dedup);
-      `base44 logs` confirm live runs. Remaining for full DoD: two-account isolation via a second
-      Gmail connect (architecturally covered by Stage 1 RLS + per-caller `getCurrentAppUserConnection`).
-- [~] Stage 3: Ingestion pipeline - pipeline + sweep + quarantine DEPLOYED and verified via
-      manualAdd on the live app (merge, out-of-order, split, newsletter, monotonicity all pass);
-      remaining: live gmail-path tests once the connector is authorized, sweep workflow run in logs
+- [x] Stage 2: Per-user Gmail (app-user connector) COMPLETE 2026-07-23, merged in PR #3. Earlier
+      apex-callback block root-caused and fixed app-side (initiate on the app origin, not the SDK's
+      default base44.app apex; see FEEDBACK.md + the RESOLUTION block above). Roi connected
+      roishmuel14@gmail.com (readonly); `syncMyMail` imports real order mail; idempotent (cursor +
+      EmailRecord dedup + page-token paging); `base44 logs` confirm live runs. **Two-account
+      isolation gate PASSED** through the real Gmail path: account B connected its OWN Gmail and
+      scanned -> imported 0 (read B's own mailbox, so no token leak), saw 0 of A's 36 orders; A saw
+      0 foreign rows and its data was unchanged. ALL DoD MET.
+- [x] Stage 3: Ingestion pipeline - COMPLETE 2026-07-23. Verified via manualAdd (merge,
+      out-of-order, split shipments, newsletter, monotonicity) AND now end-to-end on the LIVE Gmail
+      path with real merchant mail incl. a forwarded 54-item Hebrew grocery order. Idempotent both
+      ways (re-sync creates zero rows). Merge dedup + page-token paging hardened after a real
+      84-message mailbox exposed read-after-write duplicate races; `tests/` covers the pure logic.
+      `sweep`/SyncState/quarantine are RETIRED by the pivot, not outstanding (see stage 3 below).
 - [x] Stage 4: Frontend shell + shared kit - deployed 2026-07-22 (tokens, auth+OTP+Google, api
       wrappers with reasons-toasts, formatters, empty dashboard; login verified signed-out at
       375px, error toast verified via DOM)
@@ -105,9 +114,14 @@ in FEEDBACK.md.
 1. **Base44 developer platform via CLI only.** Entities as JSONC + `entities push`, Deno functions
    + `functions deploy`, Vite/React frontend + `base44 deploy`. Never the no-code builder MCP:
    different product.
-2. **Ingest = shared Gmail inbox + per-user plus-aliases + connector automation, with a 15-min
-   sweep cron as the self-healing net.** No per-user OAuth in MVP (Google verification burden;
-   full analysis in ITRACK_CONCEPT.md section 2).
+2. **Ingest = per-user Gmail OAuth (app-user connector), read-only, foreground-only.** REPLACED the
+   original shared-inbox + plus-alias + 15-min-sweep design on 2026-07-23 (PRD v1.1/v1.3); shipped
+   and verified 2026-07-23. Each user connects their OWN mailbox; `inbox/syncMyMail` reads it with
+   `getCurrentAppUserConnection`, which is REQUEST-SCOPED, so there is no background sweep and no
+   cron path: sync runs on app load, on demand, and while the app is open. Paging uses Gmail's
+   page tokens with a stable `after` bound so calls never re-list earlier pages. Manual add stays
+   as an equal ingest path. Cost of the model: the Google consent shows the "unverified app" step
+   until full restricted-scope verification (see stage 2).
 3. **All entity writes go through backend functions with `asServiceRole`; frontend SDK is
    read + invoke + subscribe only.** Ownership is an explicit `owner_email` stamped server-side;
    RLS reads key on it (service-created rows don't carry the end user's `created_by`).
@@ -115,32 +129,42 @@ in FEEDBACK.md.
    a status directly; ranks ordered(0)..delivered(4), branch states annotate.
 5. **AI = `InvokeLLM` with `response_json_schema`** for classify/extract/draft; `aiGateway` is the
    pre-decided fallback if schema compliance disappoints.
-6. **Exact-match alias routing or quarantine.** Never assign unrouted mail heuristically; admin
-   review screen instead.
+6. **Ownership comes from the token, never from the mail.** RETIRED the alias-routing/quarantine
+   rule with the per-user pivot: there is nothing to route, because the caller's own OAuth token
+   fetched the message, so `owner_email` is stamped from `auth.me()`. Idempotency key is
+   (`owner_email`, `gmail_message_id`). Merging is by (merchant domain + order number), with an
+   order-number-only fallback that refuses to cross two different known domains, then tracking
+   number, then LLM arbitration; ambiguity creates a new order rather than guessing.
 7. **English-only UI, clean consumer light design** (white cards, soft shadows, imagery forward,
    indigo accent). No RTL/i18n in MVP.
 
 ## Project structure
+
+Verified against the repo 2026-07-24 (post per-user-Gmail pivot). SyncState, the connectors dir,
+`inbox/onNewMail`, `inbox/sweep`, `inbox/confirmForwarding`, `aliasRouter` and a standalone
+`classify` are all GONE: deleted by the pivot (classify folded into `extract`).
 
 ```
 iTrack/
   base44/
     .app.jsonc            # gitignored; app id
     config.jsonc          # name, dirs, site.outputDirectory/serveCommand
-    entities/             # Order, Shipment, TrackingEvent, EmailRecord,
-                          # RefundOpportunity, RefundPolicy, UserSettings, SyncState (.jsonc)
-    connectors/gmail.jsonc
+    entities/             # 7: Order, Shipment, TrackingEvent, EmailRecord,
+                          # RefundOpportunity, RefundPolicy, UserSettings (.jsonc)
+                          # NOTE: the Gmail connector is an app-user connector configured in
+                          # Workspace Settings (id in the GMAIL_CONNECTOR_ID secret), NOT a repo file
     agents/itrack_assistant.jsonc
-    functions/
-      inbox/onNewMail/  inbox/sweep/  inbox/confirmForwarding/
+    functions/            # 9
+      inbox/syncMyMail/
       account/bootstrap/  account/wipe/  settings/update/
       orders/manualAdd/  orders/setStatus/
       refunds/scan/  refunds/updateStatus/  digest/send/
-    shared/               # aliasRouter, htmlToText, classify, extract, mergeEngine,
-                          # rehost, carriers, responses
+    shared/               # 9: gmail, pipeline, extract, mergeEngine, syncWindow,
+                          # htmlToText, carriers, rehost, responses
   src/                    # Vite + React (template), pages/ components/ api/ lib/
+  tests/                  # deno test tests/ - pure-logic units (mergeEngine, syncWindow)
+  scripts/                # base44 exec seed/verify/leak-test scripts (not deployed)
   PRD.md  BUILD_PLAN.md  CLAUDE.md  FEEDBACK.md  README.md (stage 8)
-scripts/                  # base44 exec seed/verify scripts (not deployed)
 ```
 
 ---
@@ -200,61 +224,92 @@ gets a clean 401 (verified stage 1). ALL MET - stage complete.
 
 ---
 
-## Stage 2: De-risk spike: Gmail connector + alias routing (GATE, day 1)
+## Stage 2: Per-user Gmail connect + sync (GATE) - COMPLETE 2026-07-23
 
-The scariest assumption gets verified before anything is built on it.
+The scariest assumption gets verified before anything is built on it. Rewritten for the per-user
+OAuth model (PRD amendments v1.1/v1.3); the original shared-inbox + alias-routing checklist is
+retired (no shared account, no `connectors/gmail.jsonc`, no `onNewMail`, no alias headers).
 
-- [~] `base44/connectors/gmail.jsonc` with readonly scope written; `base44 connectors push` done
-      2026-07-22 -> connector PENDING authorization (connectionId base44_6a611a5655287dedb0f0b9be).
-      **ROI MANUAL: create the iTrack Gmail account, then open
-      https://app.base44.com/api/external-auth/connect/ef769588bf3949a391a883d22bca2eee
-      in a browser and authorize while logged into THAT account. If the link has expired, rerun
-      `base44 connectors push` for a fresh one. If the final account name differs from
-      itrackapp44@gmail.com, update INBOX_BASE in src/api/auth.jsx and set the secret:
-      `base44 secrets set ITRACK_INBOX_ADDRESS=<the-address>`.** If readonly-only is rejected, accept the full
-      scope set and log to FEEDBACK.md (PRD risk #4). NOTE (logged in FEEDBACK.md): functions with
-      a connector automation cannot deploy until the connector is authorized, so after authorizing
-      rerun `base44 functions deploy`.
-- [ ] Minimal `inbox/onNewMail` that logs the FULL automation payload + fetches the new message's
-      headers via `getConnection("gmail")` and logs `Delivered-To` / `X-Forwarded-To` / `To`.
-      `function.jsonc` with the connector automation + `has_new_messages` condition (PRD section 6).
-      `base44 functions deploy`.
-- [ ] Send a plain email to `itrackapp...+testtoken@gmail.com` directly; then FORWARD a real order
-      email manually from Roi's personal Gmail to the alias; then create a Gmail filter
-      auto-forwarding and repeat. After each: `base44 logs --function inbox/onNewMail`.
-- [ ] **GATE decision, recorded here:** which header reliably carries the alias per path. If none
-      does on forwards, adopt the fallback (unique subject tag or From-matching) and update PRD
-      section 3.1 + this line before proceeding.
+- [x] Google OAuth Web client "iTrack (Base44 app-user Gmail)" (project gmail-attachment-tool,
+      consent External/**Testing**, scope `gmail.readonly` + email, test users roishmuel14@ and
+      keyboardconverter@). Authorized redirect URIs include the live and `preview--` slug callbacks
+      `https://i-track-2bdb7160.base44.app/api/external-auth/callback`. Readonly-only was ACCEPTED,
+      so PRD risk #4 did not materialize.
+- [x] Base44 app-user Gmail connector configured in Workspace Settings; id in the
+      `GMAIL_CONNECTOR_ID` secret; `account/bootstrap` returns `{configured, connected,
+      connector_id}` as the UI's single source of truth.
+- [x] **GATE decision, recorded:** the connect flow is host-dependent, not hardcoded. Base44's
+      connect-initiate MIRRORS THE REQUEST HOST into the OAuth `redirect_uri`, and the SDK client
+      defaults `serverUrl` to the unregisterable `base44.app` apex (Public Suffix List). Fix:
+      `connectGmail` (src/api/auth.jsx) calls initiate on `window.location.origin`, whose callback
+      IS registered. No Base44 change needed; `GMAIL_CONNECT_ENABLED = true`. Full root cause and
+      the two platform asks are in FEEDBACK.md.
+- [x] `inbox/syncMyMail` live: `getCurrentAppUserConnection` (request-scoped, per caller) ->
+      `listMessages`/`getMessage` -> the same `runCorePipeline` manual add feeds. One Gmail page per
+      call with `next_page_token` + a stable `after` bound echoed by `useGmailSync`, so calls never
+      re-list earlier pages. Idempotent per (`owner_email`, `gmail_message_id`).
+- [x] Verified on the live app with real merchant mail (Amazon, AliExpress, Temu, Wolt, Revolve,
+      Salomon, Israir, a forwarded 54-item Hebrew grocery order): orders/shipments/events created,
+      statuses monotonic, re-sync adds zero, `base44 logs --function inbox/syncMyMail` shows the
+      runs. Merge dedup fixed in the same pass (per-run cache + order-number fallback; live data
+      backfilled) with unit tests in `tests/` (`deno test tests/`).
+- [x] **Two-account isolation gate PASSED** (cross-cutting rule 3, exercised through the Gmail
+      path, not just RLS): account B (keyboardconverter@) connected its OWN Gmail and scanned ->
+      imported 0 (it read B's own mailbox; a token leak would have pulled A's mail in as B's) and
+      saw 0 of A's 36 orders; A saw 0 foreign Orders/EmailRecords and its data was unchanged.
 
-**DoD:** automation fires on new mail (logs prove it); alias token recovered for direct AND
-manually-forwarded mail (filter-forward result recorded either way); raw payload shape documented
-in a comment in `inbox/onNewMail`.
+**DoD:** a signed-in user connects their OWN Gmail read-only from the live app and their order mail
+becomes cards (logs prove the runs); sync is idempotent and pages without re-listing; a second
+account connecting its own Gmail sees only its own data. ALL MET - stage complete (PR #3).
+
+**Known limitation (not a blocker):** the Google consent screen shows the "unverified app" step and
+the shared project's name, because `gmail.readonly` is a restricted scope and the app is in Testing.
+Removing it needs full restricted-scope verification (verified domain + public homepage + privacy
+policy + demo video + a CASA security assessment, several weeks). Decision: stay in Testing for the
+competition and connect the demo account before recording.
 
 ---
 
-## Stage 3: Ingestion pipeline
+## Stage 3: Ingestion pipeline - COMPLETE 2026-07-23
 
-The backend centerpiece: email in, correct entities out, idempotent, quarantined when unsure.
+The backend centerpiece: email in, correct entities out, idempotent. The "quarantine when unsure"
+clause is retired with alias routing (nothing to route); ambiguity now creates a new order instead.
 
-- [ ] Shared modules: `htmlToText`, `aliasRouter` (from stage 2 findings), `classify` + `extract`
-      (single InvokeLLM call, PRD section 8 schema), `mergeEngine` (merge keys, monotonic status,
-      shipment aggregation: pure, unit-testable), `carriers`, `rehost` (UploadFile), `responses`.
-- [ ] Full `inbox/onNewMail`: idempotency check (gmail_message_id), route, pipeline, EmailRecord
-      statuses (parsed/low_confidence/irrelevant/unroutable/failed), quarantine path.
-- [x] `inbox/sweep` + SyncState cursor deployed. Scheduling note: this app generation REJECTS
-      function.jsonc automations (409 workflows_enabled; FEEDBACK.md); the "Inbox sweep" WORKFLOW
-      (every 15 min) was created via a scoped builder prompt and VERIFIED FIRING in logs
-      (20:30:04 run hit the expected connector-not-connected error path). "Refund scan" (03:00
-      UTC) and "Daily digest" (07:00 UTC) workflows requested the same way; their functions'
-      manual-trigger paths are verified; confirm first scheduled runs in tomorrow's logs.
-- [ ] Test with 5 real merchant emails (Amazon, Temu, Revolve, AliExpress, local vendor): forward
-      confirmation + shipping + delivery variants, including one out-of-order sequence and one
-      Amazon-style split into two shipments. Verify via `scripts/verify-ingest.ts` (`base44 exec`).
-- [ ] Re-forward two already-processed emails: assert zero new rows. Forward a newsletter: assert
-      one `irrelevant` EmailRecord, nothing else.
+- [x] Shared modules: `htmlToText`, `extract` (classify+extract in ONE InvokeLLM call with
+      `response_json_schema`, so no separate `classify` module), `mergeEngine` (merge keys,
+      monotonic status, shipment aggregation: pure, unit-tested), `carriers`, `rehost` (UploadFile),
+      `responses`, plus `gmail` (read-only REST) and `syncWindow` (paging math) from the pivot.
+      `aliasRouter` was never needed and is deleted.
+- [x] `inbox/syncMyMail` REPLACES `inbox/onNewMail` (per-user pivot): idempotency check on
+      (`owner_email`, `gmail_message_id`) BEFORE any LLM work, then `runCorePipeline` ->
+      EmailRecord statuses (parsed/low_confidence/irrelevant/failed; `unroutable` retired).
+      `orders/manualAdd` feeds the identical pipeline, so both paths share one parser.
+- [x] `inbox/sweep` + SyncState DELETED by the pivot, and the "Inbox sweep" workflow with them:
+      app-user tokens are request-scoped, so a cron cannot read a user's mailbox (logged in
+      FEEDBACK.md as a platform gap). The incremental cursor now lives on
+      `UserSettings.last_gmail_sync_at` and advances only when a paging session fully drains.
+      Scheduling note kept for stage 6: this app generation REJECTS function.jsonc automations
+      (409 workflows_enabled; FEEDBACK.md), so "Refund scan" (03:00 UTC) and "Daily digest"
+      (07:00 UTC) exist as builder-prompt WORKFLOWS.
+- [x] Tested against real merchant mail through the LIVE Gmail path (2026-07-23), not fixtures:
+      Amazon, AliExpress, Temu, Wolt, Revolve, Salomon, Israir, JoyBox, Local Pet Food, and a
+      forwarded 54-item Hebrew grocery confirmation parsed at 0.95-1.0 confidence. Out-of-order
+      sequences, the Amazon-style split into two shipments, and status monotonicity were verified
+      earlier via `manualAdd` on the same pipeline.
+- [x] Idempotency proven both ways: a re-sync of already-processed mail reports every message as
+      `duplicate` and creates ZERO rows (46 skipped in one run), and an immediate re-run scans 0.
+      Non-order mail lands as `irrelevant` EmailRecords and nothing else (6 in one run).
+- [x] Merge dedup hardening (found by running against a real 84-message mailbox): Base44 entity
+      reads are not read-your-writes consistent, so back-to-back emails about one order each missed
+      the other's just-created Order. Fixed with a per-run in-memory merge cache + an
+      order-number-only fallback; cross-invocation reprocessing closed with page-token paging and a
+      stable `after` bound. Live data backfilled (48 -> 36 orders; 25 duplicate EmailRecords and 18
+      duplicate TrackingEvents removed). Unit tests in `tests/` (`deno test tests/`, 15 passing).
 
-**DoD:** PRD F1 AC 1-5 and F2 AC 1-3 all pass against the deployed app; sweep visibly advances its
-cursor in logs; a deliberately alias-less email lands in quarantine.
+**DoD:** PRD F1 AC 1-5 and F2 AC 1-3 pass against the deployed app (verified on the live Gmail path
+AND via manualAdd); the incremental cursor advances in logs; idempotency holds across re-sync and
+re-paging. The "sweep advances its cursor" and "alias-less mail lands in quarantine" clauses are
+RETIRED with the shared-inbox model, not unmet. ALL MET - stage complete.
 
 ---
 
@@ -282,13 +337,17 @@ invoke error path shows a toast with the server's reason message (force one).
 - [ ] Realtime: subscribe to Order + TrackingEvent; live card updates + toasts.
 - [ ] Order detail: header, shipment blocks (copy tracking number, carrier deep link), timeline
       with source snippets, archive / mark-delivered via `orders/setStatus`.
-- [ ] Onboarding screen incl. Gmail-filter walkthrough + `inbox/confirmForwarding` assist.
+- [ ] Onboarding screen: "Connect Gmail" (read-only, one click) + paste-an-email as the equal
+      second path. The Gmail-filter walkthrough and `inbox/confirmForwarding` assist are RETIRED
+      (no forwarding in the per-user model); the function is deleted.
 - [ ] `orders/manualAdd` (paste email text OR tracking number) + UI.
 - [ ] Activity feed (latest events, newest first).
 
 **DoD:** PRD F3 AC 1-3, F4 AC 1-3, F6 AC 1-2 (two-window realtime + two-account RLS-over-realtime),
-F8 AC 1-2, F9 AC 1-3; narrow-viewport pass on every screen; forward-an-email -> card appears with
-no refresh (the demo moment works end to end).
+F8 AC 1-2, F9 AC 1-3; narrow-viewport pass on every screen; **connect Gmail -> real order cards
+appear** (the demo moment, replacing "forward-an-email" with the pivot; the connect + first-sync
+half is already verified live in stage 2, so what remains here is the authenticated click-through,
+the two-window realtime test, and the 375px pass on inner screens).
 
 ---
 
@@ -355,14 +414,26 @@ screen seen.
 5. Commit at every green DoD; small commits between checkboxes.
 6. No em dashes in any file, UI string, or commit message. English-only UI.
 7. Tick the stage checkbox in "Current status" when its DoD passes; note deviations inline.
+8. **Reproduce through the real UI, not a CLI/curl proxy.** The Gmail connect bug hid for hours
+   because `base44 exec` and curl minted a WORKING connect URL while the browser button minted a
+   broken one (different SDK `serverUrl`). A green CLI probe is not evidence the feature works.
+9. **Put pure logic in `base44/shared/` and unit-test it** (`deno test tests/`). Both the merge keys
+   and the paging window are pure and testable; a first-sync paging bug shipped and was caught in
+   review, and the test that now guards it takes four lines. Entity/LLM behavior still needs live
+   verification, but never leave decision logic untested because "the platform needs a deploy".
 
 ## Open decisions (defaults chosen, override anytime)
 
 - Accent color: indigo #4F46E5. App display name: "iTrack". Repo: `roishmuel/itrack` (private
   until stage 8).
-- Demo Gmail: `itrackapp44@gmail.com` (Roi may pick another; record the final one here).
-- Demo merchants: Amazon, Temu, Revolve, AliExpress, local pet-food vendor.
-- Digest default: on, 07:00 UTC. Sweep cadence: 15 min.
+- Demo Gmail: RETIRED as a concept (no app-owned mailbox). Judges either connect their OWN Gmail
+  (only if added as a Google test user, since the consent screen is in Testing) or use manual add;
+  the recorded demo uses roishmuel14@gmail.com, connected BEFORE filming so the "unverified app"
+  consent step never appears on camera.
+- Demo merchants: whatever is really in the demo mailbox. As of 2026-07-23 that is Amazon,
+  AliExpress, Temu, Wolt, Revolve, Salomon, Israir, JoyBox, Local Pet Food, plus a Hebrew grocery
+  order (a nice showcase for the parser, since it is forwarded, RTL, and 54 line items).
+- Digest default: on, 07:00 UTC. Sweep cadence: RETIRED (no background sync; foreground paging).
 - Domain: default `<slug>.base44.app` (no custom domain in MVP).
 
 ## Day mapping (6 days, slack burns bottom-up)
