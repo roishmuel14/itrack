@@ -245,7 +245,10 @@ Deno.serve(async (req) => {
       `backfillImages ${user.email}: processed=${processed} updated=${updated} deferred=${deferred} ` +
         `remaining=${remaining} guesses=${guesses} logo_searches=${logoSearches}`,
     );
-    return ok({ ok: true, processed, updated, remaining, has_more: remaining > 0 });
+    // `deferred` is part of the contract: rows skipped untouched because a run
+    // budget ran out are progress too, so a round that only deferred must not
+    // read as "nothing left to do" on the client.
+    return ok({ ok: true, processed, deferred, updated, remaining, has_more: remaining > 0 });
   } catch (err) {
     return serverError(err);
   }

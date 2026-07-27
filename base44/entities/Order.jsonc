@@ -42,7 +42,15 @@
           "price":        { "type": "number" },
           "image_url":    { "type": "string", "description": "Re-hosted via UploadFile" },
           "image_width":  { "type": "integer", "description": "Measured min(width,height) px of the stored image; >=256 counts as HQ" },
-          "image_source": { "type": "string", "description": "email (ingest thumbnail or restored from the original email) | product_page | search" },
+          // Load-bearing, not descriptive: "email" marks the photo the merchant
+          // themselves sent, which orders/enrichProductImages treats as
+          // authoritative and never replaces with a web-found picture. Kept as
+          // an enum so a typo cannot silently forfeit that guarantee.
+          "image_source": {
+            "type": "string",
+            "enum": ["email", "product_page", "search"],
+            "description": "email (ingest thumbnail or restored from the original email) | product_page | search"
+          },
           "product_url":  { "type": "string", "description": "Product page link mined from the order email (may be a tracking redirector); consumed by orders/enrichProductImages, never rendered as an image" }
         }
       }

@@ -60,7 +60,13 @@ export function mergeItems(
     const inc = byName.get(key(e.name));
     if (!inc) return e;
     const next = { ...e };
-    if (!e.image_url && inc.image_url) {
+    // A photo from the merchant's own email outranks anything enrichment found
+    // on the web (a web result is regularly the wrong colourway or a series
+    // shot), so a later email may overwrite a product_page/search image as well
+    // as fill a blank. It never overwrites another email image.
+    const webSourced = e.image_source === "product_page" || e.image_source === "search";
+    const incomingIsEmail = inc.image_source === "email";
+    if (inc.image_url && (!e.image_url || (webSourced && incomingIsEmail))) {
       next.image_url = inc.image_url;
       next.image_width = inc.image_width;
       next.image_source = inc.image_source;

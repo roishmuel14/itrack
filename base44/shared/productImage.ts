@@ -31,6 +31,10 @@ export const EMAIL_MIN_PX = 96; // floor for images restored from the order emai
 // are never share cards, so they are always allowed.
 export const ITEM_MAX_ASPECT = 1.8;
 
+// Logos may be far wider than product photos (wordmarks), but a hero banner is
+// not a logo: this keeps a promotional strip out of the card's logo sticker.
+export const LOGO_MAX_ASPECT = 8;
+
 // True only for wide landscape images, the shape a store banner actually takes.
 export function isBannerShaped(w: number, h: number, maxAspect = ITEM_MAX_ASPECT): boolean {
   return w > h && w / Math.max(1, h) > maxAspect;
@@ -224,10 +228,11 @@ export async function fetchAndUploadIfLarge(
 }
 
 // Tier A: product page -> best candidate sharp enough -> Base44 storage.
-// Ultra-wide candidates only win when nothing squarer qualifies (learned from
-// a 1200x589 store banner replacing a real product photo). Callers replacing
-// an EXISTING image should pass allowBanner: false so a banner can only ever
-// fill a blank, never displace a real photo.
+// A banner-shaped candidate is only ever a last resort, and only when the
+// caller opts in via allowBanner (learned from a 1200x589 store banner
+// replacing a real product photo). The default is FALSE so an item photo can
+// never silently become a store banner; the logo route, where a share card
+// usually IS the brand mark, is the one caller that opts in.
 export async function fetchProductPageImage(
   base44: Base44Client,
   pageUrl: string,
@@ -258,7 +263,7 @@ export async function fetchProductPageImage(
       const hosted = await uploadImage(base44, img, opts.prefix ?? "item");
       return hosted ? { url: hosted, width } : null;
     }
-    if ((opts.allowBanner ?? true) && !bannerFallback) bannerFallback = { img, width };
+    if ((opts.allowBanner ?? false) && !bannerFallback) bannerFallback = { img, width };
   }
   if (bannerFallback) {
     const hosted = await uploadImage(base44, bannerFallback.img, opts.prefix ?? "item");
@@ -583,6 +588,9 @@ export async function searchMerchantLogo(
       minPx,
       budgetMs: Math.max(0, left()),
       prefix: "logo",
+      // A homepage share card is usually the brand mark itself, so this is the
+      // one route where a wide landscape image is the thing we actually want.
+      allowBanner: true,
     });
     if (got) return { url: got.url, width: got.width, source: "web_search" };
   }

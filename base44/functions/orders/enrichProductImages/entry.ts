@@ -31,6 +31,7 @@ import { createClientFromRequest } from "npm:@base44/sdk";
 import { getUserOrNull, ok, serverError, unauthorized } from "../../../shared/responses.ts";
 import { getMessage } from "../../../shared/gmail.ts";
 import { extractImageCandidatesDetailed, extractLinkCandidates } from "../../../shared/htmlToText.ts";
+import { decideEnrichOutcome, enrichQueueSort } from "../../../shared/enrichPolicy.ts";
 import {
   EMAIL_MIN_PX,
   fetchAndUploadIfLarge,
@@ -38,6 +39,7 @@ import {
   FILL_MIN_PX,
   HQ_MIN_PX,
   ITEM_MAX_ASPECT,
+  LOGO_MAX_ASPECT,
   mapEmailAssets,
   searchProductOnline,
 } from "../../../shared/productImage.ts";
@@ -133,14 +135,7 @@ Deno.serve(async (req) => {
     const logoDeficient = (o: any) =>
       !o.logo_url || o.logo_source === "google_favicon" || (o.logo_width ?? 0) < LOGO_BLURRY_PX;
 
-    const queue = orders
-      .filter(needsWork)
-      // deno-lint-ignore no-explicit-any
-      .sort((a: any, b: any) =>
-        String(b.last_event_at ?? b.created_date ?? "").localeCompare(
-          String(a.last_event_at ?? a.created_date ?? ""),
-        )
-      );
+    const queue = orders.filter(needsWork).sort(enrichQueueSort);
 
     if (queue.length === 0) {
       return ok({ ok: true, processed: 0, updated: 0, remaining: 0, has_more: false });
@@ -313,6 +308,9 @@ Deno.serve(async (req) => {
                   Math.max(LOGO_BLURRY_PX, (o.logo_width ?? 0) + 1),
                   left(),
                   "logo",
+                  // Wordmarks are legitimately wide, but a hero strip is not a
+                  // logo: this keeps a promo banner out of the logo sticker.
+                  LOGO_MAX_ASPECT,
                 );
                 if (got) {
                   logoWin = got;
@@ -454,65 +452,49 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Defer when a route this order still needs never ran: either nothing was
-      // attempted at all, or a blank item's LAST route (the web search) was
-      // budget-blocked. Stamping an attempt there would cooldown-lock the item
-      // for a week over a scheduling accident rather than a real failure. Any
-      // work already done (mined product_urls, a logo win) is still persisted;
-      // only the attempt counter and the cooldown are withheld.
-      if (!upgraded && (searchStarved || learnedNewUrl || (!attempted && starved))) {
-        const deferPatch: Record<string, unknown> = {};
-        if (changed) deferPatch.items = items;
-        if (logoWin) {
-          deferPatch.logo_url = logoWin.url;
-          deferPatch.logo_width = logoWin.width;
-          deferPatch.logo_source = "email_header";
-          updated++;
-        }
-        if (learnedNewUrl) {
-          // A search named a page we have never fetched (typically the
-          // manufacturer's own product page after the merchant's site failed).
-          // Fetching it is cheap tier A work, so clear the cooldown to retry it
-          // on the very next round instead of parking a promising lead for a
-          // week. Attempts still increment, so this converges within
-          // MAX_ATTEMPTS rather than looping on fresh URLs forever.
-          deferPatch.image_attempts = (o.image_attempts ?? 0) + 1;
-          deferPatch.image_checked_at = null;
-          deferPatch.image_enrich_version = ENRICH_VERSION;
-        }
-        if (Object.keys(deferPatch).length > 0) await service.Order.update(o.id, deferPatch);
-        deferred++;
-        continue;
-      }
+      // All attempt/cooldown/generation bookkeeping lives in one pure function
+      // (shared/enrichPolicy.ts) so it can be unit tested.
+      const decision = decideEnrichOutcome({
+        upgraded,
+        logoWin: !!logoWin,
+        attempted,
+        starved,
+        searchStarved,
+        learnedNewUrl,
+        attempts: o.image_attempts ?? 0,
+        reopened: (o.image_enrich_version ?? 1) < ENRICH_VERSION,
+      });
 
-      processed++;
-      const reopened = (o.image_enrich_version ?? 1) < ENRICH_VERSION;
-      const patch: Record<string, unknown> = {
-        // upgraded is strictly about ITEM images: each success permanently
-        // removes an item from the queue predicate, so resetting the budget
-        // cannot loop. A logo-only win must NOT reset attempts (it does not
-        // shrink the item queue). A version bump grants one fresh budget.
-        image_attempts: upgraded ? 0 : reopened ? 1 : (o.image_attempts ?? 0) + 1,
-        // Written even on failure: this stamp is what terminates the loop.
-        image_checked_at: new Date().toISOString(),
-        image_enrich_version: ENRICH_VERSION,
-      };
+      const patch: Record<string, unknown> = {};
       if (changed) patch.items = items;
       if (logoWin) {
         patch.logo_url = logoWin.url;
         patch.logo_width = logoWin.width;
         patch.logo_source = "email_header";
       }
-      if (upgraded || logoWin) updated++;
-      await service.Order.update(o.id, patch);
+      if (decision.imageAttempts !== null) patch.image_attempts = decision.imageAttempts;
+      // A deferred row keeps its old (or absent) stamp on purpose: that is what
+      // sorts it to the front of the next round instead of losing the same
+      // budget race repeatedly.
+      if (decision.stampCheckedAt) patch.image_checked_at = new Date().toISOString();
+      else if (learnedNewUrl) patch.image_checked_at = null;
+      if (decision.stampVersion) patch.image_enrich_version = ENRICH_VERSION;
+
+      if (Object.keys(patch).length > 0) await service.Order.update(o.id, patch);
+      if (decision.countsUpdated) updated++;
+      if (decision.defer) deferred++;
+      else processed++;
     }
 
+    // Deferred rows are still outstanding work, so they count toward remaining.
     const remaining = Math.max(0, queue.length - processed);
     console.log(
       `enrichProductImages ${user.email}: processed=${processed} updated=${updated} deferred=${deferred} ` +
         `remaining=${remaining} tiers=${JSON.stringify(tiers)} gmail_fetches=${gmailFetches} searches=${searches}`,
     );
-    return ok({ ok: true, processed, updated, remaining, has_more: remaining > 0 });
+    // `deferred` is part of the contract: the client treats processed+deferred
+    // as progress, so a round that only deferred does not read as "done".
+    return ok({ ok: true, processed, deferred, updated, remaining, has_more: remaining > 0 });
   } catch (err) {
     return serverError(err);
   }

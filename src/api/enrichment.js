@@ -14,7 +14,11 @@ async function drain(name, rounds, tally, onProgress) {
     tally.processed += res.processed ?? 0;
     tally.updated += res.updated ?? 0;
     onProgress?.({ ...tally });
-    if (!res.has_more || (res.processed ?? 0) === 0) break;
+    // Deferred rows were deliberately left untouched so they lead the next
+    // round, so they count as progress: stopping on processed alone would end
+    // a run with outstanding work and no signal that anything remains.
+    const progress = (res.processed ?? 0) + (res.deferred ?? 0);
+    if (!res.has_more || progress === 0) break;
   }
 }
 
