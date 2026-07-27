@@ -105,6 +105,17 @@ bugs. On submission day this file becomes the answers to the three required ques
   for a nonexistent address, so it can be used to enumerate which emails have accounts. Suggestion:
   make resend-otp respond 200 unconditionally, like the reset request does.
 
+- 2026-07-26 (CLI 0.1.5): **`base44 logs --env prod` reports nothing for a CLI-deployed app that is
+  live and serving real users, and the wording implies the app was never shipped.** Our app is
+  deployed with `base44 deploy`, serves real traffic on its `*.base44.app` URL, and runs scheduled
+  workflows daily - yet `--env prod` answers `No production logs found. Has this app been published?`
+  while every real run (user function calls AND scheduled workflow runs) appears under
+  `--env preview`. So for a CLI-first app, "preview" IS production, and the flag that sounds like
+  the live environment is the empty one. That is a genuinely alarming message to read mid-verification
+  (we briefly thought the deployment was gone). Suggestions: (a) note in `--help` and the docs that
+  CLI-deployed apps log under `preview` because `prod` refers to the builder's Publish flow, or
+  (b) make the empty-prod message say so explicitly instead of asking whether the app was published.
+
 - 2026-07-23 (SDK 0.8.3, Node headless): **The realtime `subscribe()` socket connects ANONYMOUSLY
   and silently in Node - zero events, no error - when the token is not passed to `createClient`.**
   `client.js` sets `socketConfig.token` from `createClient(config).token`, and the only fallback is
