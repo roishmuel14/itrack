@@ -1,4 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+/* Fonts (Archivo display / Spline Sans body / Spline Sans Mono data) load
+   from index.html so the stylesheet never blocks on a second request. */
 
 @tailwind base;
 @tailwind components;
@@ -50,7 +51,12 @@
     @apply border-border;
   }
   html {
-    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    font-family: 'Spline Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
   }
   body {
     @apply bg-background text-foreground antialiased;
@@ -63,5 +69,95 @@
   }
   .card-shadow-hover {
     box-shadow: 0 2px 4px rgb(16 24 40 / 0.06), 0 10px 28px rgb(16 24 40 / 0.10);
+  }
+}
+
+/* ---------- Landing page ----------
+   Display type: Archivo, slightly condensed, heavy, tight. The mono face is
+   reserved for operational data (tracking numbers, ETAs, kickers, buttons),
+   the way real shipping labels set their machine data. */
+.display-head {
+  font-family: 'Archivo', 'Arial Narrow', ui-sans-serif, sans-serif;
+  font-stretch: 84%;
+  font-weight: 860;
+  line-height: 0.94;
+  letter-spacing: -0.012em;
+  text-transform: uppercase;
+  text-wrap: balance;
+}
+.kicker {
+  font-family: 'Spline Sans Mono', ui-monospace, monospace;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+/* Marching dashes = parcels in motion. Runs on hero route + section dividers. */
+@keyframes route-march {
+  to { stroke-dashoffset: -26; }
+}
+.route-march {
+  animation: route-march 1.6s linear infinite;
+}
+
+/* Hero label cards drift like parcels on a belt. Rotation lives on the
+   wrapper; the float transform stays on the inner node so they compose. */
+@keyframes label-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-9px); }
+}
+.label-float {
+  animation: label-float 6.5s ease-in-out infinite;
+}
+
+/* Live progress shimmer on the in-transit card. */
+@keyframes bar-scan {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(340%); }
+}
+.bar-scan {
+  animation: bar-scan 2.6s ease-in-out infinite;
+}
+
+/* Merchant ticker. Content is duplicated once; -50% loops seamlessly. */
+@keyframes marquee {
+  to { transform: translateX(-50%); }
+}
+.marquee-track {
+  animation: marquee 36s linear infinite;
+}
+
+/* Scroll reveal: sections arrive like status updates, not all at once. */
+.reveal {
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+.reveal.is-in {
+  opacity: 1;
+  transform: none;
+}
+
+@keyframes pin-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.55; }
+  50% { transform: scale(1.9); opacity: 0; }
+}
+.pin-pulse {
+  animation: pin-pulse 2.2s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-march,
+  .label-float,
+  .bar-scan,
+  .marquee-track,
+  .pin-pulse {
+    animation: none;
+  }
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
   }
 }

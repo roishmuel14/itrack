@@ -2,23 +2,13 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { Package, ReceiptText, Settings, LogOut } from 'lucide-react';
 import { useAuth } from '@/api/auth';
 import AssistantChat from '@/components/AssistantChat';
+import BrandMark from '@/components/BrandMark';
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: Package, end: true },
   { to: '/refunds', label: 'Refunds', icon: ReceiptText },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
-
-function Logo() {
-  return (
-    <div className="flex items-center gap-2 select-none">
-      <div className="w-8 h-8 rounded-xl bg-primary grid place-items-center">
-        <Package className="w-4.5 h-4.5 text-primary-foreground" size={18} />
-      </div>
-      <span className="font-extrabold text-lg tracking-tight">iTrack</span>
-    </div>
-  );
-}
 
 export default function AppShell() {
   const { user, logout } = useAuth();
@@ -30,7 +20,7 @@ export default function AppShell() {
       <header className="sticky top-0 z-40 bg-background/90 backdrop-blur border-b">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
           <button onClick={() => navigate('/')} aria-label="iTrack home">
-            <Logo />
+            <BrandMark markClass="w-8 h-8" textClass="text-lg" />
           </button>
           <nav className="flex items-center gap-1" aria-label="Main">
             {nav.map(({ to, label, icon: Icon, end }) => (

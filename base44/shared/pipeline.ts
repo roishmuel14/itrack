@@ -13,7 +13,13 @@
 // - EmailRecord.snippet <= 2000 chars, never the full body.
 
 import { extractImageCandidates, htmlToText, truncateForLLM } from "./htmlToText.ts";
-import { analyzeEmail, arbitrateSameOrder, type ExtractionResult } from "./extract.ts";
+import {
+  analyzeEmail,
+  arbitrateSameOrder,
+  canCreateOrder,
+  type ExtractionResult,
+  isTrackablePurchase,
+} from "./extract.ts";
 import {
   computeStatus,
   decideMerge,
@@ -23,7 +29,9 @@ import {
   type StatusSignal,
 } from "./mergeEngine.ts";
 import { resolveCarrier } from "./carriers.ts";
-import { rehostImage, rehostMerchantLogo } from "./rehost.ts";
+import { rehostImage } from "./rehost.ts";
+import { resolveAndRehostLogo } from "./merchantLogo.ts";
+import { domainFromSender } from "./senderDomain.ts";
 import { getMessage } from "./gmail.ts";
 
 // deno-lint-ignore no-explicit-any
@@ -33,11 +41,54 @@ const SNIPPET_MAX = 1990;
 const MAX_REHOSTED_IMAGES = 3;
 const LOW_CONFIDENCE = 0.6;
 
+interface OrderItem {
+  name?: string;
+  qty?: number;
+  price?: number;
+  image_url?: string;
+}
+
+// Fill gaps in an existing item list from a later, richer email. Deliberately
+// never adds or removes items: a shipping confirmation that lists 1 of 3 shipped
+// items must not truncate the order it merged into.
+export function mergeItems(
+  existing: OrderItem[],
+  incoming: OrderItem[],
+): { items: OrderItem[]; changed: boolean } {
+  if (existing.length === 0) return { items: incoming, changed: incoming.length > 0 };
+  const key = (n?: string) => (n ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  const byName = new Map(incoming.map((i) => [key(i.name), i]));
+  let changed = false;
+  const items = existing.map((e) => {
+    const inc = byName.get(key(e.name));
+    if (!inc) return e;
+    const next = { ...e };
+    if (!e.image_url && inc.image_url) {
+      next.image_url = inc.image_url;
+      changed = true;
+    }
+    if (e.price == null && inc.price != null) {
+      next.price = inc.price;
+      changed = true;
+    }
+    if ((e.qty ?? 1) === 1 && (inc.qty ?? 1) > 1) {
+      next.qty = inc.qty;
+      changed = true;
+    }
+    return next;
+  });
+  return { items, changed };
+}
+
 export interface PipelineResult {
   status: "processed" | "duplicate" | "irrelevant" | "unroutable" | "failed";
   emailRecordId?: string;
   orderId?: string;
   detail?: string;
+  // "excluded_kind": a real order, but not a physical parcel (food/grocery,
+  // SaaS/digital, booking). Lets manual add explain the policy instead of
+  // claiming the text is not an order email.
+  reason?: "excluded_kind";
 }
 
 export interface CoreInput {
@@ -68,7 +119,7 @@ export interface RunCache {
     ordered_at?: string | null;
     created_date?: string;
   }>;
-  shipments: Array<{ id: string; order_id: string; tracking_number?: string | null }>;
+  shipments: Array<{ id: string; order_id: string; tracking_number?: string | null; carrier?: string | null }>;
 }
 
 function unionById<T extends { id: string }>(dbRows: T[], cacheRows: T[] = []): T[] {
@@ -111,7 +162,7 @@ function signalsFromEvents(events: Array<{ type: string; occurred_at: string }>)
 }
 
 function orderSummaryFor(o: {
-  merchant_name?: string;
+  merchant_name?: string | null;
   order_number?: string | null;
   total?: number | null;
   currency?: string | null;
@@ -125,6 +176,33 @@ function orderSummaryFor(o: {
     `ordered at: ${o.ordered_at ?? "?"}`,
     `items: ${(o.items ?? []).map((i) => i.name).join("; ") || "?"}`,
   ].join("\n");
+}
+
+// Single writer for EmailRecord provenance rows: the pipeline's exit paths
+// differ only in classification / parse_status / linkage.
+async function recordEmail(
+  // deno-lint-ignore no-explicit-any
+  service: any,
+  input: CoreInput,
+  snippet: string,
+  fields: {
+    classification?: string;
+    parse_status: string;
+    confidence?: number;
+    order_id?: string;
+    error?: string;
+  },
+) {
+  return await service.EmailRecord.create({
+    owner_email: input.ownerEmail,
+    gmail_message_id: input.gmailMessageId,
+    thread_id: input.threadId,
+    from_address: input.from,
+    subject: input.subject.slice(0, 490),
+    received_at: input.receivedAt,
+    snippet,
+    ...fields,
+  });
 }
 
 // ---------------------------------------------------------------- gmail path
@@ -192,20 +270,21 @@ export async function runCorePipeline(
     });
 
     // 4. Irrelevant mail: record and stop (keeps re-forwards idempotent).
-    if (!extraction.is_order_related || extraction.classification === "irrelevant") {
-      const rec = await service.EmailRecord.create({
-        owner_email: input.ownerEmail,
-        gmail_message_id: input.gmailMessageId,
-        thread_id: input.threadId,
-        from_address: input.from,
-        subject: input.subject.slice(0, 490),
-        received_at: input.receivedAt,
-        classification: "irrelevant",
+    // isTrackablePurchase is the code-level backstop for the classifier's
+    // exclusion rules: the LLM reliably NAMES what was bought (product_kind)
+    // but unreliably folds exclusions into is_order_related, so the
+    // combination happens here. The record keeps the model's true
+    // classification; parse_status carries the drop.
+    if (!extraction.is_order_related || extraction.classification === "irrelevant" || !isTrackablePurchase(extraction)) {
+      const excludedKind = extraction.is_order_related && extraction.classification !== "irrelevant";
+      const rec = await recordEmail(service, input, snippet, {
+        classification: extraction.classification,
         parse_status: "irrelevant",
         confidence: extraction.confidence,
-        snippet,
       });
-      return { status: "irrelevant", emailRecordId: rec.id };
+      return excludedKind
+        ? { status: "irrelevant", emailRecordId: rec.id, reason: "excluded_kind" }
+        : { status: "irrelevant", emailRecordId: rec.id };
     }
 
     const occurredAt = extraction.event_date ?? input.receivedAt;
@@ -254,6 +333,18 @@ export async function runCorePipeline(
         : { kind: "new_order" };
     }
 
+    // Weak classifications (review nags, tips, refund notes, misc) may only
+    // ATTACH to an order that already exists; they never open a card. A flight
+    // "confirmation" tagged other_order_related stops here, not on the board.
+    if (decision.kind === "new_order" && !canCreateOrder(extraction.classification)) {
+      const rec = await recordEmail(service, input, snippet, {
+        classification: extraction.classification,
+        parse_status: "unroutable",
+        confidence: extraction.confidence,
+      });
+      return { status: "unroutable", emailRecordId: rec.id };
+    }
+
     // Re-host item images (bounded) before writing items.
     const items = [];
     let rehostedCount = 0;
@@ -271,10 +362,16 @@ export async function runCorePipeline(
       });
     }
 
+    // Logo lookup domain. Kept SEPARATE from merchant_domain on purpose: that
+    // field is half the merge key and drives fuzzyCandidates, so a guessed value
+    // there would change matching for every future email.
+    const senderDomain = domainFromSender(input.from, { ownerEmail: input.ownerEmail }).domain;
+
     let orderId: string;
     if (decision.kind === "matched_order") {
       orderId = decision.orderId;
-      const order = myOrders.find((o: any) => o.id === orderId)!;
+      // deno-lint-ignore no-explicit-any
+      const order: any = myOrders.find((o: any) => o.id === orderId)!;
       // Fill gaps; never blank existing values with nulls.
       const patch: Record<string, unknown> = {};
       if (!order.order_number && extraction.order_number) patch.order_number = extraction.order_number;
@@ -285,16 +382,42 @@ export async function runCorePipeline(
       if (extraction.eta_date) patch.eta_date = extraction.eta_date;
       if (order.total == null && extraction.total != null) patch.total = extraction.total;
       if (extraction.currency && !order.currency) patch.currency = extraction.currency;
-      if ((order.items ?? []).length === 0 && items.length > 0) patch.items = items;
+      if (items.length > 0) {
+        // A later, richer email can now fill in images the first one missed.
+        const merged = mergeItems(order.items ?? [], items);
+        if (merged.changed) patch.items = merged.items;
+      }
+      const logoDomain = normalizeDomain(order.merchant_domain) ||
+        normalizeDomain(order.logo_domain) ||
+        normalizeDomain(extraction.merchant_domain) ||
+        senderDomain ||
+        "";
+      if (!order.logo_domain && logoDomain) patch.logo_domain = logoDomain;
+      // Backfill the logo when this order never got one (first email had no
+      // domain, or the fetch failed back then).
+      if (!order.logo_url && logoDomain) {
+        const resolved = await resolveAndRehostLogo(base44, logoDomain);
+        if (resolved) {
+          patch.logo_url = resolved.url;
+          patch.logo_source = resolved.source;
+          patch.logo_width = resolved.width;
+        }
+        patch.logo_checked_at = new Date().toISOString();
+      }
       if (Object.keys(patch).length > 0) await service.Order.update(orderId, patch);
     } else {
       const domain = normalizeDomain(extraction.merchant_domain) || undefined;
-      const logoUrl = domain ? await rehostMerchantLogo(base44, domain) : null;
+      const logoDomain = domain || senderDomain || "";
+      const resolved = logoDomain ? await resolveAndRehostLogo(base44, logoDomain) : null;
       const created = await service.Order.create({
         owner_email: input.ownerEmail,
         merchant_name: extraction.merchant_name ?? "Unknown merchant",
         merchant_domain: domain,
-        logo_url: logoUrl ?? undefined,
+        logo_domain: logoDomain || undefined,
+        logo_url: resolved?.url ?? undefined,
+        logo_source: resolved?.source ?? undefined,
+        logo_width: resolved?.width ?? undefined,
+        logo_checked_at: logoDomain ? new Date().toISOString() : undefined,
         order_number: extraction.order_number ?? undefined,
         ordered_at: extraction.classification === "order_confirmation" ? occurredAt : undefined,
         currency: extraction.currency ?? "USD",
@@ -350,18 +473,10 @@ export async function runCorePipeline(
     }
 
     // 7. EmailRecord (before the event so provenance links resolve).
-    const parseStatus = extraction.confidence < LOW_CONFIDENCE ? "low_confidence" : "parsed";
-    const emailRecord = await service.EmailRecord.create({
-      owner_email: input.ownerEmail,
-      gmail_message_id: input.gmailMessageId,
-      thread_id: input.threadId,
-      from_address: input.from,
-      subject: input.subject.slice(0, 490),
-      received_at: input.receivedAt,
+    const emailRecord = await recordEmail(service, input, snippet, {
       classification: extraction.classification,
-      parse_status: parseStatus,
+      parse_status: extraction.confidence < LOW_CONFIDENCE ? "low_confidence" : "parsed",
       confidence: extraction.confidence,
-      snippet,
       order_id: orderId,
     });
 
@@ -427,15 +542,8 @@ export async function runCorePipeline(
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     try {
-      const rec = await service.EmailRecord.create({
-        owner_email: input.ownerEmail,
-        gmail_message_id: input.gmailMessageId,
-        thread_id: input.threadId,
-        from_address: input.from,
-        subject: input.subject.slice(0, 490),
-        received_at: input.receivedAt,
+      const rec = await recordEmail(service, input, snippet, {
         parse_status: "failed",
-        snippet,
         error: detail.slice(0, 900),
       });
       return { status: "failed", emailRecordId: rec.id, detail };

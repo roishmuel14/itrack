@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  Archive, ArchiveRestore, ArrowLeft, CheckCircle2, ExternalLink, Package, Truck,
+  Archive, ArchiveRestore, ArrowLeft, CheckCircle2, ExternalLink, Truck,
 } from 'lucide-react';
 import { Order, Shipment, TrackingEvent, EmailRecord, RefundOpportunity, subscribeTo } from '@/api/entities';
 import { invokeFunction } from '@/api/functions';
 import { useToast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 import CopyButton from '@/components/CopyButton';
+import { MerchantLogo } from '@/components/MerchantImage';
 import { countdownText, daysUntil, formatDate, formatDateTime, formatMoney, progressPercent, statusChip } from '@/lib/format';
 
 const EVENT_DOT = {
@@ -135,13 +136,7 @@ export default function OrderDetail() {
       <div className="bg-card rounded-2xl border card-shadow p-6 mb-4">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3 min-w-0">
-            {order.logo_url ? (
-              <img src={order.logo_url} alt="" className="w-10 h-10 rounded-xl border" />
-            ) : (
-              <div className="w-10 h-10 rounded-xl bg-secondary grid place-items-center">
-                <Package className="w-5 h-5 text-primary" />
-              </div>
-            )}
+            <MerchantLogo order={order} size={40} rounded="rounded-xl" className="border" />
             <div className="min-w-0">
               <h1 className="text-xl font-extrabold tracking-tight truncate">{order.merchant_name}</h1>
               {order.order_number && (
@@ -182,9 +177,9 @@ export default function OrderDetail() {
                 {item.image_url ? (
                   <img src={item.image_url} alt="" className="w-11 h-11 rounded-lg object-cover border" loading="lazy" />
                 ) : (
-                  <div className="w-11 h-11 rounded-lg bg-muted grid place-items-center shrink-0">
-                    <Package className="w-4 h-4 text-muted-foreground/50" />
-                  </div>
+                  // No photo for this line item: fall back to the merchant mark
+                  // rather than an anonymous grey box.
+                  <MerchantLogo order={order} size={44} rounded="rounded-lg" className="border" />
                 )}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">{item.name}</p>

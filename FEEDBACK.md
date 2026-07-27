@@ -34,6 +34,25 @@ bugs. On submission day this file becomes the answers to the three required ques
 
 ## Where we got stuck / confused
 
+- 2026-07-26 (live, one occurrence, hypothesis): **a `functions deploy` may not serve the new
+  bundle immediately.** We changed the Gmail search string inside `inbox/syncMyMail` (removed a
+  `from:` sender), deploy reported success, and a sync triggered ~18 minutes later STILL listed 16
+  emails only the OLD query matches (all from the removed sender). A second sync ~15 minutes after
+  that used the new query (those 16 no longer listed, same 60-day window). Same function, no code
+  change in between, so either warm instances keep serving the previous bundle for a while or
+  registration completes async after the CLI returns. Repro odds unknown; worth knowing that
+  "deployed" does not always mean "what runs on the next invocation".
+- 2026-07-26 (live, systematic across ~40 real emails): **`InvokeLLM` follows enum fields far
+  better than prose exclusion rules.** A prompt with an explicit "always irrelevant" list (SaaS,
+  food delivery, flights) was ignored at 0.9+ confidence whenever the email LOOKED like an order
+  receipt: Wolt food receipts, Atlassian/Namecheap SaaS orders, and a flight booking all came back
+  `is_order_related: true`. Adding a required `product_kind` enum to `response_json_schema`
+  (physical_goods / food_or_grocery_delivery / digital_or_saas / service_or_booking / other) fixed
+  it completely: every one of the same emails was tagged with the right kind at confidence 1, and
+  the relevance decision moved into backend code keyed on that enum. Rule of thumb for InvokeLLM:
+  make the model NAME facts via schema enums; never ask it to fold an exclusion policy into a
+  boolean.
+
 - 2026-07-22 (CLI 0.1.5, live, repro'd 3x): **A `function.jsonc` in the function folder breaks
   `base44/shared/` imports at deploy.** With `base44/functions/inbox/sweep/{entry.ts,function.jsonc}`,
   deploy fails server-side with `Cannot import "../../../shared/gmail.ts": it must reference a file
