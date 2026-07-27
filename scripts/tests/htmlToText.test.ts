@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   extractImageCandidates,
+  extractImageCandidatesDetailed,
   extractLinkCandidates,
   htmlToText,
   truncateForLLM,
@@ -31,6 +32,28 @@ Deno.test("extractImageCandidates: keeps product images, drops pixels and dupes"
     "https://cdn.shop.com/product1.jpg",
     "https://cdn.shop.com/product2.png",
   ]);
+});
+
+Deno.test("extractImageCandidatesDetailed: alt decoded, declared dims parsed, filters intact", () => {
+  const html = `
+    <img src="https://cdn.shop.com/ball.jpg" alt="Mikasa FT-5 &amp; pump" width="300" height='300'>
+    <img width=180 src="https://cdn.shop.com/logo.png" alt="LaPelota">
+    <img src="https://cdn.shop.com/noattrs.png">
+    <img src="https://track.shop.com/pixel.gif" width="1" height="1">
+    <img src="cid:inline-attachment">`;
+  assertEquals(extractImageCandidatesDetailed(html), [
+    { src: "https://cdn.shop.com/ball.jpg", alt: "Mikasa FT-5 & pump", width: 300, height: 300 },
+    { src: "https://cdn.shop.com/logo.png", alt: "LaPelota", width: 180, height: null },
+    { src: "https://cdn.shop.com/noattrs.png", alt: "", width: null, height: null },
+  ]);
+});
+
+Deno.test("extractImageCandidates wrapper equals detailed srcs on the shared fixture", () => {
+  const html = `
+    <img src="https://cdn.shop.com/product1.jpg" width="300">
+    <img src="https://track.shop.com/open.aspx?id=1" width="1" height="1">
+    <img src="https://cdn.shop.com/product2.png" alt="item">`;
+  assertEquals(extractImageCandidates(html), extractImageCandidatesDetailed(html).map((c) => c.src));
 });
 
 Deno.test("extractLinkCandidates: keeps product links incl. redirectors, drops nav/legal/social", () => {

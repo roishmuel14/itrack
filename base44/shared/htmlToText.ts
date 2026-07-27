@@ -63,10 +63,21 @@ export function htmlToText(html: string): string {
   return text;
 }
 
-// Image URL candidates from <img src>, filtered to plausible product images:
-// absolute http(s), not obvious tracking pixels / spacers / icons.
-export function extractImageCandidates(html: string, limit = 10): string[] {
-  const candidates: string[] = [];
+export interface EmailImageCandidate {
+  src: string;
+  alt: string; // entity-decoded; "" when absent
+  width: number | null; // declared width attribute; null when absent
+  height: number | null;
+}
+
+// Image candidates from <img> tags with their alt text and declared size,
+// filtered to plausible content images: absolute http(s), not obvious tracking
+// pixels / spacers / icons. The alt + declared size feed the LLM that maps
+// email images to line items and spots the merchant's header logo. NOTE:
+// cid:-referenced MIME attachments never appear here (gmail.ts reads body
+// parts only); that is an accepted gap, not a bug.
+export function extractImageCandidatesDetailed(html: string, limit = 10): EmailImageCandidate[] {
+  const candidates: EmailImageCandidate[] = [];
   const seen = new Set<string>();
   const imgRe = /<img\b[^>]*>/gi;
   for (const match of html.matchAll(imgRe)) {
@@ -82,11 +93,22 @@ export function extractImageCandidates(html: string, limit = 10): string[] {
     if ((w && Number(w[1]) <= 2) || (h && Number(h[1]) <= 2)) continue;
     if (/\b(pixel|spacer|blank|beacon|open\.aspx|track(ing)?)\b/i.test(src)) continue;
     if (/\.(gif)(\?|$)/i.test(src) && /1x1|pixel/i.test(src)) continue;
+    const altMatch = tag.match(/\balt\s*=\s*["']([^"']*)["']/i);
     seen.add(src);
-    candidates.push(src);
+    candidates.push({
+      src,
+      alt: altMatch ? decodeEntities(altMatch[1]).trim() : "",
+      width: w ? Number(w[1]) : null,
+      height: h ? Number(h[1]) : null,
+    });
     if (candidates.length >= limit) break;
   }
   return candidates;
+}
+
+// Back-compat: bare src list (the extraction prompt only needs URLs).
+export function extractImageCandidates(html: string, limit = 10): string[] {
+  return extractImageCandidatesDetailed(html, limit).map((c) => c.src);
 }
 
 // Non-product link shapes: navigation, legal, account, social, app stores.

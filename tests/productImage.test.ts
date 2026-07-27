@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
-import { extractPageImageCandidates } from "../base44/shared/productImage.ts";
+import { extractPageImageCandidates, sanitizePageUrls, validateAssetPicks } from "../base44/shared/productImage.ts";
 
 const BASE = "https://shop.example.com/products/dog-bed";
 
@@ -67,4 +67,53 @@ Deno.test("extractPageImageCandidates: caps at 4 and skips non-http", () => {
     .join("");
   assertEquals(extractPageImageCandidates(metas, BASE).length, 4);
   assertEquals(extractPageImageCandidates(`<meta property="og:image" content="data:image/png;base64,x">`, BASE), []);
+});
+
+Deno.test("sanitizePageUrls: dedupes by registrable domain, drops generic hosts and junk, caps at 3", () => {
+  assertEquals(
+    sanitizePageUrls([
+      "https://www.ksp.co.il/web/item/1",
+      "https://ksp.co.il/web/item/2",
+      "https://www.google.com/search?q=x",
+      "not-a-url",
+      "https://www.amazon.com/dp/B0ABC",
+      "https://www.apple.com/il/shop/product/x",
+      "https://zap.co.il/model.aspx?m=1",
+    ]),
+    [
+      "https://www.ksp.co.il/web/item/1",
+      "https://www.amazon.com/dp/B0ABC",
+      "https://www.apple.com/il/shop/product/x",
+    ],
+  );
+  assertEquals(sanitizePageUrls("nope"), []);
+});
+
+Deno.test("validateAssetPicks: bounds-checks, duplicate image claims drop all, logo collision drops both", () => {
+  const raw = {
+    item_picks: [
+      { item_index: 1, link_index: 2, image_index: 1 },
+      { item_index: 2, link_index: null, image_index: 1 }, // duplicate image claim -> both dropped
+      { item_index: 3, link_index: 99, image_index: 3 }, // link out of bounds -> null; image ok
+      { item_index: 9, link_index: 1, image_index: 2 }, // item out of bounds -> ignored
+    ],
+    logo_image_index: 4,
+  };
+  assertEquals(validateAssetPicks(raw, 3, 2, 4), {
+    links: [1, null, null],
+    images: [null, null, 2],
+    logo: 3,
+  });
+  // Logo pointing at a surviving item image drops both.
+  assertEquals(
+    validateAssetPicks(
+      { item_picks: [{ item_index: 1, link_index: null, image_index: 2 }], logo_image_index: 2 },
+      1,
+      0,
+      3,
+    ),
+    { links: [null], images: [null], logo: null },
+  );
+  // Garbage input -> all-null shape.
+  assertEquals(validateAssetPicks("garbage", 2, 1, 1), { links: [null, null], images: [null, null], logo: null });
 });

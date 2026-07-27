@@ -12,13 +12,20 @@
 
 import { fetchImageBytes, isSafePublicHttpUrl, uploadImage, type FetchedImage } from "./rehost.ts";
 import { BROWSERISH_HEADERS, readCapped, type ResolvedLogo } from "./merchantLogo.ts";
-import { imageSize, shortSide } from "./imageSize.ts";
+import { imageSize } from "./imageSize.ts";
+import type { EmailImageCandidate } from "./htmlToText.ts";
 
 // deno-lint-ignore no-explicit-any
 type Base44Client = any;
 
 export const HQ_MIN_PX = 256; // an image this sharp counts as HQ (replacement gate)
 export const FILL_MIN_PX = 128; // acceptance gate when the item has no image at all
+export const EMAIL_MIN_PX = 96; // floor for images restored from the order email itself (provenance-perfect)
+
+// Banner shape: standard og share cards are 1.91:1. A candidate this wide is
+// more likely a store brand card than a product photo, so item images reject
+// or deprioritize it (logos may be as wide as they like).
+export const ITEM_MAX_ASPECT = 1.8;
 
 const PAGE_TIMEOUT_MS = 4000;
 const MAX_PAGE_BYTES = 512 * 1024;
@@ -181,13 +188,16 @@ async function fetchPageHtml(
 }
 
 // Fetch one image URL directly; keep it only if it measures at least minPx on
-// the short side (measured BEFORE upload, so rejects cost no storage).
+// the short side (measured BEFORE upload, so rejects cost no storage). Pass
+// maxAspect to also reject banner-shaped images (item photos), leave unset for
+// logos where wide wordmarks are fine.
 export async function fetchAndUploadIfLarge(
   base44: Base44Client,
   imageUrl: string,
   minPx: number,
   budgetMs: number,
   prefix = "item",
+  maxAspect?: number,
 ): Promise<ProductPageImage | null> {
   if (budgetMs < MIN_STEP_MS) return null;
   const img = await fetchImageBytes(imageUrl, {
@@ -195,15 +205,14 @@ export async function fetchAndUploadIfLarge(
     headers: BROWSERISH_HEADERS,
   });
   if (!img) return null;
-  const width = shortSide(img.bytes);
+  const dims = imageSize(img.bytes);
+  if (!dims) return null;
+  const width = Math.min(dims.w, dims.h);
   if (width < minPx) return null;
+  if (maxAspect && Math.max(dims.w, dims.h) / Math.max(1, width) > maxAspect) return null;
   const hosted = await uploadImage(base44, img, prefix);
   return hosted ? { url: hosted, width } : null;
 }
-
-// Banner shape: standard og share cards are 1.91:1. A candidate this wide is
-// more likely the store's brand card than the product photo.
-const BANNER_ASPECT = 1.8;
 
 // Tier A: product page -> best candidate sharp enough -> Base44 storage.
 // Ultra-wide candidates only win when nothing squarer qualifies (learned from
@@ -236,7 +245,7 @@ export async function fetchProductPageImage(
     if (!dims) continue;
     const width = Math.min(dims.w, dims.h);
     if (width < minPx) continue;
-    if (Math.max(dims.w, dims.h) / Math.max(1, width) <= BANNER_ASPECT) {
+    if (Math.max(dims.w, dims.h) / Math.max(1, width) <= ITEM_MAX_ASPECT) {
       const hosted = await uploadImage(base44, img, opts.prefix ?? "item");
       return hosted ? { url: hosted, width } : null;
     }
@@ -251,7 +260,7 @@ export async function fetchProductPageImage(
 
 export interface ProductSearchHit {
   image_url: string | null;
-  product_page_url: string | null;
+  product_page_urls: string[]; // 0-3 pages, distinct registrable domains
 }
 
 // Hosts a web search loves to return that never serve a usable product URL.
@@ -273,8 +282,34 @@ function usableSearchUrl(raw: unknown): string | null {
   return raw;
 }
 
+// Validate + dedupe LLM-returned page URLs: one page per registrable domain
+// (the whole point of the fan-out is diversifying past a bot-blocked host),
+// order preserved, capped. Exported for unit tests.
+export function sanitizePageUrls(raw: unknown, cap = 3): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  const domains = new Set<string>();
+  for (const entry of raw) {
+    const url = usableSearchUrl(entry);
+    if (!url) continue;
+    let reg: string;
+    try {
+      reg = new URL(url).hostname.toLowerCase().replace(/^www\./, "").split(".").slice(-2).join(".");
+    } catch (_) {
+      continue;
+    }
+    if (domains.has(reg)) continue;
+    domains.add(reg);
+    out.push(url);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
 // Tier C: internet-context LLM search. Returns raw candidate URLs; callers must
-// fetch + measure + rehost them (never store a search URL directly).
+// fetch + measure + rehost them (never store a search URL directly). Asks for
+// up to 3 product pages on DIFFERENT sites because any single retail host may
+// bot-block server fetches; a marketplace or manufacturer page usually won't.
 export async function searchProductOnline(
   base44: Base44Client,
   q: { itemName: string; merchantName?: string | null; merchantDomain?: string | null; currency?: string | null },
@@ -284,10 +319,10 @@ export async function searchProductOnline(
   try {
     const result = await base44.asServiceRole.integrations.Core.InvokeLLM({
       prompt: [
-        "Find this exact retail product on the web and return:",
-        "- product_page_url: the URL of its product page, preferably on the merchant's own site (a marketplace listing also counts)",
-        "- image_url: a DIRECT product photo URL (an actual image file / CDN image URL, roughly 400px or larger). Only a URL you actually saw on a page; NEVER construct or guess a CDN path.",
-        "Return null for any field you are not confident about. Never return search-result, social, or homepage URLs.",
+        "Find this exact retail product on the web. Return:",
+        "- product_page_urls: up to 3 URLs of product pages for this EXACT product, each on a DIFFERENT website, preferring in order: (1) the selling merchant's own site, (2) a large marketplace listing (Amazon, eBay, AliExpress, zap.co.il), (3) the manufacturer's official product page. Only pages you actually saw in results; never search-result pages, category pages, social posts, or homepages.",
+        "- image_url: a DIRECT product photo URL (an actual image file on a CDN, roughly 400px or larger). Only a file URL you actually saw on a page; NEVER construct or guess a CDN path. Usually null.",
+        "The product name may be in Hebrew; search both the Hebrew name and an English translation (brand and model words stay as written).",
         "",
         `Product: ${item}`,
         q.merchantName ? `Sold by: ${q.merchantName}` : "",
@@ -299,18 +334,18 @@ export async function searchProductOnline(
         type: "object",
         properties: {
           image_url: { type: ["string", "null"] },
-          product_page_url: { type: ["string", "null"] },
+          product_page_urls: { type: "array", items: { type: "string" } },
         },
-        required: ["image_url", "product_page_url"],
+        required: ["image_url", "product_page_urls"],
       },
     });
     if (!result || typeof result !== "object") return null;
     const rec = result as Record<string, unknown>;
     const hit: ProductSearchHit = {
       image_url: usableSearchUrl(rec.image_url),
-      product_page_url: usableSearchUrl(rec.product_page_url),
+      product_page_urls: sanitizePageUrls(rec.product_page_urls),
     };
-    return hit.image_url || hit.product_page_url ? hit : null;
+    return hit.image_url || hit.product_page_urls.length ? hit : null;
   } catch (_) {
     return null;
   }
@@ -509,61 +544,125 @@ export async function searchMerchantLogo(
   return null;
 }
 
-// Tier B helper: map legacy items to link candidates re-mined from the original
-// email. One cheap LLM call (no internet context). Returns an array aligned
-// with itemNames; entries are 0-based indexes into linkCandidates, or null.
-export async function mapItemsToLinks(
+// ---- Email asset mapping (tier B of orders/enrichProductImages) ----
+
+export interface EmailAssetPicks {
+  links: Array<number | null>; // aligned with itemNames; 0-based into linkCandidates
+  images: Array<number | null>; // aligned with itemNames; 0-based into imageCandidates
+  logo: number | null; // 0-based into imageCandidates
+}
+
+function emptyPicks(itemCount: number): EmailAssetPicks {
+  return { links: Array(itemCount).fill(null), images: Array(itemCount).fill(null), logo: null };
+}
+
+// Validate raw LLM picks: bounds-check every 1-based index into 0-based, drop
+// garbage to null. An image claimed by MORE THAN ONE item is dropped from all
+// of them, and a logo colliding with a surviving item image drops both:
+// attaching the wrong photo to a product is worse than leaving it blank.
+// Exported for unit tests.
+export function validateAssetPicks(
+  raw: unknown,
+  itemCount: number,
+  linkCount: number,
+  imageCount: number,
+): EmailAssetPicks {
+  const out = emptyPicks(itemCount);
+  const rec = raw as { item_picks?: unknown; logo_image_index?: unknown } | null;
+  const picks = Array.isArray(rec?.item_picks) ? rec.item_picks : [];
+  for (const p of picks as Array<Record<string, unknown>>) {
+    const item = Number(p?.item_index);
+    if (!Number.isInteger(item) || item < 1 || item > itemCount) continue;
+    if (p?.link_index != null) {
+      const link = Number(p.link_index);
+      if (Number.isInteger(link) && link >= 1 && link <= linkCount) out.links[item - 1] = link - 1;
+    }
+    if (p?.image_index != null) {
+      const img = Number(p.image_index);
+      if (Number.isInteger(img) && img >= 1 && img <= imageCount) out.images[item - 1] = img - 1;
+    }
+  }
+  const counts = new Map<number, number>();
+  for (const idx of out.images) if (idx != null) counts.set(idx, (counts.get(idx) ?? 0) + 1);
+  out.images = out.images.map((idx) => (idx != null && (counts.get(idx) ?? 0) > 1 ? null : idx));
+
+  if (rec?.logo_image_index != null) {
+    const logo = Number(rec.logo_image_index);
+    if (Number.isInteger(logo) && logo >= 1 && logo <= imageCount) out.logo = logo - 1;
+  }
+  if (out.logo != null && out.images.includes(out.logo)) {
+    out.images = out.images.map((idx) => (idx === out.logo ? null : idx));
+    out.logo = null;
+  }
+  return out;
+}
+
+// ONE cheap no-internet LLM call answering everything tier B needs from a
+// re-fetched email: per item the product-page LINK, per item the product PHOTO
+// among the embedded images, and which image is the merchant's own brand logo.
+export async function mapEmailAssets(
   base44: Base44Client,
-  itemNames: string[],
-  linkCandidates: string[],
-): Promise<Array<number | null>> {
-  const none: Array<number | null> = itemNames.map(() => null);
-  if (itemNames.length === 0 || linkCandidates.length === 0) return none;
+  args: {
+    merchantName: string;
+    itemNames: string[];
+    linkCandidates: string[];
+    imageCandidates: EmailImageCandidate[];
+    wantLogo: boolean;
+  },
+): Promise<EmailAssetPicks> {
+  const { merchantName, itemNames, linkCandidates, imageCandidates, wantLogo } = args;
+  const none = emptyPicks(itemNames.length);
+  const nothingToMap = (itemNames.length === 0 && !wantLogo) ||
+    (linkCandidates.length === 0 && imageCandidates.length === 0);
+  if (nothingToMap) return none;
   try {
+    const imageLine = (c: EmailImageCandidate, i: number) =>
+      `${i + 1}. ${c.src}` +
+      (c.alt ? ` | alt="${c.alt}"` : "") +
+      (c.width || c.height ? ` | declared ${c.width ?? "?"}x${c.height ?? "?"}` : "");
     const result = await base44.asServiceRole.integrations.Core.InvokeLLM({
       prompt: [
-        "An order email contained these product line items and these links.",
-        "For each item, pick the link that opens that exact product's page on the store",
-        "(usually the link that wrapped the product image or name). Tracking-wrapped links",
-        "(click.*, awstrack, etc.) are fine. Never pick order-status, package-tracking,",
-        "unsubscribe, account, or help links. Use null when unsure.",
+        `An order email from the store "${merchantName}" contained these product line items, links, and embedded images.`,
+        "1) For each item, pick the link that opens that exact product's page on the store (usually the link wrapping the product image or name). Tracking-wrapped links (click.*, awstrack, etc.) are fine. Never order-status, package-tracking, unsubscribe, account, or help links.",
+        "2) For each item, pick the image that is a PHOTO OF THAT PRODUCT itself. Never the store's logo, banners, promos, icons, payment or social badges, and never a photo of a different line item. An image may be assigned to at most ONE item.",
+        wantLogo
+          ? `3) logo_image_index: which image is "${merchantName}"'s own brand logo (usually in the email header or footer; the alt text often names the brand; often a wide wordmark). Null if none clearly is.`
+          : "",
+        "Use null anywhere you are not sure.",
         "",
         "Items (by index):",
         ...itemNames.map((n, i) => `${i + 1}. ${n}`),
         "",
         "Links (by index):",
-        ...linkCandidates.map((u, i) => `${i + 1}. ${u}`),
-      ].join("\n"),
+        ...(linkCandidates.length ? linkCandidates.map((u, i) => `${i + 1}. ${u}`) : ["(none)"]),
+        "",
+        "Images (by index):",
+        ...(imageCandidates.length ? imageCandidates.map(imageLine) : ["(none)"]),
+      ].filter(Boolean).join("\n"),
       response_json_schema: {
         type: "object",
         properties: {
-          picks: {
+          item_picks: {
             type: "array",
             items: {
               type: "object",
               properties: {
                 item_index: { type: "integer", description: "1-based index into the items list" },
                 link_index: { type: ["integer", "null"], description: "1-based index into the links list, or null" },
+                image_index: { type: ["integer", "null"], description: "1-based index into the images list, or null" },
               },
-              required: ["item_index", "link_index"],
+              required: ["item_index", "link_index", "image_index"],
             },
           },
+          logo_image_index: {
+            type: ["integer", "null"],
+            description: "1-based index of the merchant's brand logo in the images list, or null",
+          },
         },
-        required: ["picks"],
+        required: ["item_picks", "logo_image_index"],
       },
     });
-    const picks = (result as { picks?: Array<{ item_index?: unknown; link_index?: unknown }> })?.picks;
-    if (!Array.isArray(picks)) return none;
-    const out: Array<number | null> = itemNames.map(() => null);
-    for (const p of picks) {
-      const item = Number(p?.item_index);
-      if (!Number.isInteger(item) || item < 1 || item > itemNames.length) continue;
-      if (p?.link_index == null) continue;
-      const link = Number(p.link_index);
-      if (!Number.isInteger(link) || link < 1 || link > linkCandidates.length) continue;
-      out[item - 1] = link - 1;
-    }
-    return out;
+    return validateAssetPicks(result, itemNames.length, linkCandidates.length, imageCandidates.length);
   } catch (_) {
     return none;
   }

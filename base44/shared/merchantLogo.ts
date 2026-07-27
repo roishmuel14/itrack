@@ -25,7 +25,8 @@ export type LogoSource =
   | "well_known"
   | "duckduckgo"
   | "google_favicon"
-  | "web_search";
+  | "web_search"
+  | "email_header";
 
 export interface ResolvedLogo {
   url: string;
