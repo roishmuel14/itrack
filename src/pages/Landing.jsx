@@ -65,7 +65,7 @@ function CtaButton({ to = '/login', children, variant = 'solid', className = '' 
 }
 
 // ---------------------------------------------------------------- hero visual
-function LabelCard({ merchant, item, pill, route, eta, tracking, progress, scanning, className = '', floatDelay }) {
+function LabelCard({ merchant, item, image, pill, route, eta, tracking, progress, scanning, className = '', floatDelay }) {
   return (
     <div className={`absolute ${className}`}>
       <div className="label-float w-[290px] rounded-2xl border bg-card p-4 card-shadow" style={{ animationDelay: floatDelay }}>
@@ -73,7 +73,16 @@ function LabelCard({ merchant, item, pill, route, eta, tracking, progress, scann
           <span className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{merchant}</span>
           <StatusPill tone={pill.tone}>{pill.text}</StatusPill>
         </div>
-        <p className="mt-1.5 text-[15px] font-semibold leading-snug">{item}</p>
+        <div className="mt-2 flex items-center gap-3">
+          <img
+            src={image}
+            alt=""
+            className="h-14 w-14 shrink-0 rounded-xl border bg-white object-contain p-1"
+            loading="eager"
+            decoding="async"
+          />
+          <p className="text-[15px] font-semibold leading-snug">{item}</p>
+        </div>
         <div className="mt-3 border-t border-dashed pt-3">
           <div className="flex items-center justify-between font-mono text-[11px] text-muted-foreground">
             <span>{route}</span>
@@ -96,11 +105,11 @@ function LabelCard({ merchant, item, pill, route, eta, tracking, progress, scann
 
 function HeroVisual() {
   return (
-    <div className="relative mx-auto h-[520px] w-[440px] max-w-full max-sm:h-[470px] max-sm:scale-[0.8] max-sm:-my-8" aria-hidden="true">
+    <div className="relative mx-auto h-[640px] w-[440px] max-w-full max-sm:h-[560px] max-sm:scale-[0.76] max-sm:-my-12" aria-hidden="true">
       {/* route the parcels travel, marching toward the pin */}
-      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 440 520" fill="none">
+      <svg className="absolute inset-0 h-full w-full" viewBox="0 0 440 640" fill="none">
         <path
-          d="M30 496 C 150 470, 110 330, 220 280 C 330 230, 300 120, 396 72"
+          d="M30 612 C 150 580, 110 400, 220 340 C 330 280, 300 130, 396 72"
           stroke="hsl(var(--primary) / 0.35)"
           strokeWidth="2"
           strokeDasharray="6 8"
@@ -116,9 +125,10 @@ function HeroVisual() {
         </span>
       </div>
       <LabelCard
-        className="left-0 top-[64px] -rotate-[5deg]"
+        className="left-0 top-[34px] -rotate-[5deg]"
         merchant="aliexpress.com"
         item="Mechanical keyboard kit, 75%"
+        image="/brand/prod-keyboard.webp"
         pill={{ tone: 'transit', text: 'IN TRANSIT' }}
         route="SZX &#10141; TLV"
         eta="ETA AUG 04"
@@ -128,9 +138,10 @@ function HeroVisual() {
         floatDelay="0.8s"
       />
       <LabelCard
-        className="left-[92px] top-[218px] rotate-[3deg] z-10"
+        className="left-[92px] top-[228px] rotate-[3deg] z-10"
         merchant="amazon.com"
-        item="Sony WH-1000XM6 headphones"
+        item="Noise cancelling headphones"
+        image="/brand/prod-headphones.webp"
         pill={{ tone: 'soon', text: 'OUT FOR DELIVERY' }}
         route="LOCAL COURIER"
         eta="TODAY"
@@ -139,9 +150,10 @@ function HeroVisual() {
         floatDelay="0s"
       />
       <LabelCard
-        className="left-[30px] top-[372px] -rotate-[2deg] z-20"
+        className="left-[30px] top-[422px] -rotate-[2deg] z-20"
         merchant="asos.com"
         item="Runner jacket, olive M"
+        image="/brand/prod-jacket.webp"
         pill={{ tone: 'delivered', text: 'DELIVERED' }}
         route="SIGNED: FRONT DOOR"
         eta="JUL 22"
@@ -318,7 +330,15 @@ function RefundSection() {
               <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">aliexpress.com &#183; #8817243</span>
               <StatusPill tone="overdue">6 DAYS LATE</StatusPill>
             </div>
-            <p className="mt-2 text-[15px] font-semibold">Trail camera, 4K night vision</p>
+            <div className="mt-2 flex items-center gap-3">
+              <img
+                src="/brand/prod-camera.webp"
+                alt=""
+                className="h-14 w-14 shrink-0 rounded-xl border bg-white object-contain p-1"
+                loading="lazy"
+              />
+              <p className="text-[15px] font-semibold leading-snug">Trail camera, 4K night vision</p>
+            </div>
             <div className="mt-3 space-y-1.5 border-t border-dashed pt-3 font-mono text-[11px] text-muted-foreground">
               <div className="flex justify-between"><span>PROMISED</span><span className="text-foreground">JUL 20</span></div>
               <div className="flex justify-between"><span>ARRIVED</span><span className="text-foreground">&#8212;</span></div>
