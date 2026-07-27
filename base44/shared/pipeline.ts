@@ -13,7 +13,13 @@
 // - EmailRecord.snippet <= 2000 chars, never the full body.
 
 import { extractImageCandidates, htmlToText, truncateForLLM } from "./htmlToText.ts";
-import { analyzeEmail, arbitrateSameOrder, type ExtractionResult } from "./extract.ts";
+import {
+  analyzeEmail,
+  arbitrateSameOrder,
+  canCreateOrder,
+  type ExtractionResult,
+  isTrackablePurchase,
+} from "./extract.ts";
 import {
   computeStatus,
   decideMerge,
@@ -79,6 +85,10 @@ export interface PipelineResult {
   emailRecordId?: string;
   orderId?: string;
   detail?: string;
+  // "excluded_kind": a real order, but not a physical parcel (food/grocery,
+  // SaaS/digital, booking). Lets manual add explain the policy instead of
+  // claiming the text is not an order email.
+  reason?: "excluded_kind";
 }
 
 export interface CoreInput {
@@ -168,6 +178,33 @@ function orderSummaryFor(o: {
   ].join("\n");
 }
 
+// Single writer for EmailRecord provenance rows: the pipeline's exit paths
+// differ only in classification / parse_status / linkage.
+async function recordEmail(
+  // deno-lint-ignore no-explicit-any
+  service: any,
+  input: CoreInput,
+  snippet: string,
+  fields: {
+    classification?: string;
+    parse_status: string;
+    confidence?: number;
+    order_id?: string;
+    error?: string;
+  },
+) {
+  return await service.EmailRecord.create({
+    owner_email: input.ownerEmail,
+    gmail_message_id: input.gmailMessageId,
+    thread_id: input.threadId,
+    from_address: input.from,
+    subject: input.subject.slice(0, 490),
+    received_at: input.receivedAt,
+    snippet,
+    ...fields,
+  });
+}
+
 // ---------------------------------------------------------------- gmail path
 
 // Process one message from the owner's OWN mailbox (app-user connector).
@@ -233,29 +270,21 @@ export async function runCorePipeline(
     });
 
     // 4. Irrelevant mail: record and stop (keeps re-forwards idempotent).
-    // product_kind is the code-level backstop for the classifier's exclusion
-    // rules: only physical parcels get cards. The LLM reliably NAMES what was
-    // bought but unreliably folds exclusions into is_order_related, so the
-    // combination happens here. "other"/missing kinds survive only with hard
-    // logistics evidence (carrier parcel notices name no product).
-    const kind = extraction.product_kind ?? null;
-    const kindAllowed = kind === "physical_goods" ||
-      ((kind === null || kind === "other") &&
-        !!(extraction.tracking_number || extraction.carrier));
-    if (!extraction.is_order_related || extraction.classification === "irrelevant" || !kindAllowed) {
-      const rec = await service.EmailRecord.create({
-        owner_email: input.ownerEmail,
-        gmail_message_id: input.gmailMessageId,
-        thread_id: input.threadId,
-        from_address: input.from,
-        subject: input.subject.slice(0, 490),
-        received_at: input.receivedAt,
-        classification: "irrelevant",
+    // isTrackablePurchase is the code-level backstop for the classifier's
+    // exclusion rules: the LLM reliably NAMES what was bought (product_kind)
+    // but unreliably folds exclusions into is_order_related, so the
+    // combination happens here. The record keeps the model's true
+    // classification; parse_status carries the drop.
+    if (!extraction.is_order_related || extraction.classification === "irrelevant" || !isTrackablePurchase(extraction)) {
+      const excludedKind = extraction.is_order_related && extraction.classification !== "irrelevant";
+      const rec = await recordEmail(service, input, snippet, {
+        classification: extraction.classification,
         parse_status: "irrelevant",
         confidence: extraction.confidence,
-        snippet,
       });
-      return { status: "irrelevant", emailRecordId: rec.id };
+      return excludedKind
+        ? { status: "irrelevant", emailRecordId: rec.id, reason: "excluded_kind" }
+        : { status: "irrelevant", emailRecordId: rec.id };
     }
 
     const occurredAt = extraction.event_date ?? input.receivedAt;
@@ -307,19 +336,11 @@ export async function runCorePipeline(
     // Weak classifications (review nags, tips, refund notes, misc) may only
     // ATTACH to an order that already exists; they never open a card. A flight
     // "confirmation" tagged other_order_related stops here, not on the board.
-    const CREATE_CLASSIFICATIONS = new Set(["order_confirmation", "shipping_update", "delivery", "delay"]);
-    if (decision.kind === "new_order" && !CREATE_CLASSIFICATIONS.has(extraction.classification)) {
-      const rec = await service.EmailRecord.create({
-        owner_email: input.ownerEmail,
-        gmail_message_id: input.gmailMessageId,
-        thread_id: input.threadId,
-        from_address: input.from,
-        subject: input.subject.slice(0, 490),
-        received_at: input.receivedAt,
+    if (decision.kind === "new_order" && !canCreateOrder(extraction.classification)) {
+      const rec = await recordEmail(service, input, snippet, {
         classification: extraction.classification,
         parse_status: "unroutable",
         confidence: extraction.confidence,
-        snippet,
       });
       return { status: "unroutable", emailRecordId: rec.id };
     }
@@ -452,18 +473,10 @@ export async function runCorePipeline(
     }
 
     // 7. EmailRecord (before the event so provenance links resolve).
-    const parseStatus = extraction.confidence < LOW_CONFIDENCE ? "low_confidence" : "parsed";
-    const emailRecord = await service.EmailRecord.create({
-      owner_email: input.ownerEmail,
-      gmail_message_id: input.gmailMessageId,
-      thread_id: input.threadId,
-      from_address: input.from,
-      subject: input.subject.slice(0, 490),
-      received_at: input.receivedAt,
+    const emailRecord = await recordEmail(service, input, snippet, {
       classification: extraction.classification,
-      parse_status: parseStatus,
+      parse_status: extraction.confidence < LOW_CONFIDENCE ? "low_confidence" : "parsed",
       confidence: extraction.confidence,
-      snippet,
       order_id: orderId,
     });
 
@@ -529,15 +542,8 @@ export async function runCorePipeline(
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     try {
-      const rec = await service.EmailRecord.create({
-        owner_email: input.ownerEmail,
-        gmail_message_id: input.gmailMessageId,
-        thread_id: input.threadId,
-        from_address: input.from,
-        subject: input.subject.slice(0, 490),
-        received_at: input.receivedAt,
+      const rec = await recordEmail(service, input, snippet, {
         parse_status: "failed",
-        snippet,
         error: detail.slice(0, 900),
       });
       return { status: "failed", emailRecordId: rec.id, detail };

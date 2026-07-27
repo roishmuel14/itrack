@@ -90,6 +90,36 @@ export const EXTRACTION_SCHEMA = {
   required: ["is_order_related", "classification", "product_kind", "confidence"],
 };
 
+// ------------------------------------------------------------- policy gates
+// Kept beside the schema so the enum, the prompt, and the code acting on them
+// stay in one file. Tested in scripts/tests/extractGates.test.ts.
+
+// Classifications allowed to OPEN a card. Everything else (seller messages,
+// refund notes, misc) may only attach to an existing order (PRD v1.4).
+export const CREATE_CLASSIFICATIONS: ReadonlySet<string> = new Set([
+  "order_confirmation",
+  "shipping_update",
+  "delivery",
+  "delay",
+]);
+
+export function canCreateOrder(classification: string): boolean {
+  return CREATE_CLASSIFICATIONS.has(classification);
+}
+
+// Only physical parcels get cards (PRD v1.4). "other"/missing kinds survive on
+// hard logistics evidence alone, because carrier parcel notices name no
+// product; a NAMED exclusion kind (food, SaaS, booking) is final and is never
+// overridden by evidence.
+export function isTrackablePurchase(
+  e: Pick<ExtractionResult, "product_kind" | "tracking_number" | "carrier">,
+): boolean {
+  const kind = e.product_kind ?? null;
+  if (kind === "physical_goods") return true;
+  if (kind === null || kind === "other") return !!(e.tracking_number || e.carrier);
+  return false;
+}
+
 export interface EmailForExtraction {
   from: string;
   subject: string;

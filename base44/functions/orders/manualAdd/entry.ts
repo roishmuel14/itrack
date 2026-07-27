@@ -44,9 +44,17 @@ Deno.serve(async (req) => {
         source: "manual",
       });
       if (result.status === "irrelevant") {
-        return fail(422, "Cannot add order", [
-          { code: "not_order_email", message: "That text does not look like an order or delivery email" },
-        ]);
+        return result.reason === "excluded_kind"
+          ? fail(422, "Cannot add order", [
+            {
+              code: "excluded_kind",
+              message:
+                "iTrack tracks physical parcels only; food, grocery, digital, and booking orders are not tracked",
+            },
+          ])
+          : fail(422, "Cannot add order", [
+            { code: "not_order_email", message: "That text does not look like an order or delivery email" },
+          ]);
       }
       if (result.status !== "processed") {
         return fail(422, "Cannot add order", [

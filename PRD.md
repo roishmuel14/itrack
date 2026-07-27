@@ -53,6 +53,20 @@ document wins.
 > ~9 duplicate Order rows and splits orders when the LLM extracts inconsistent merchant names;
 > dedup fix tracked separately.)
 
+> **AMENDMENT v1.4 (2026-07-26, Roi's decision): only physical parcels become cards; relevance
+> gates in code, not in the prompt.** Live data showed InvokeLLM ignores prose exclusion lists
+> whenever an email looks like an order receipt (Wolt food, Atlassian/Namecheap SaaS, an Israir
+> flight all kept at 0.9+ confidence), so the section-8 extraction schema gains a REQUIRED
+> `product_kind` enum (`physical_goods` / `food_or_grocery_delivery` / `digital_or_saas` /
+> `service_or_booking` / `other`) and the pipeline enforces policy on it: cards only for
+> `physical_goods`; `other`/missing kinds survive only with a tracking number or carrier (terse
+> carrier notices name no product); a named exclusion kind is never overridden by evidence.
+> Additionally `seller_message` / `refund_update` / `other_order_related` emails may only attach
+> to an existing order, never create one (recorded `unroutable` otherwise). Product rulings:
+> restaurant AND supermarket/grocery orders are out (per-ruling: Wolt removed from the sync
+> sender query); store-pickup orders are in (physical goods awaiting collection). Verified on the
+> live app via full wipe + 60-day resync: 10 cards, all parcels; 14 drops, all correct.
+
 ---
 
 ## 1. Overview
