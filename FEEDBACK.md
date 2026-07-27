@@ -43,6 +43,25 @@ bugs. On submission day this file becomes the answers to the three required ques
 
 ## Where we got stuck / confused
 
+- 2026-07-26 (live, one occurrence, hypothesis): **a `functions deploy` may not serve the new
+  bundle immediately.** We changed the Gmail search string inside `inbox/syncMyMail` (removed a
+  `from:` sender), deploy reported success, and a sync triggered ~18 minutes later STILL listed 16
+  emails only the OLD query matches (all from the removed sender). A second sync ~15 minutes after
+  that used the new query (those 16 no longer listed, same 60-day window). Same function, no code
+  change in between, so either warm instances keep serving the previous bundle for a while or
+  registration completes async after the CLI returns. Repro odds unknown; worth knowing that
+  "deployed" does not always mean "what runs on the next invocation".
+- 2026-07-26 (live, systematic across ~40 real emails): **`InvokeLLM` follows enum fields far
+  better than prose exclusion rules.** A prompt with an explicit "always irrelevant" list (SaaS,
+  food delivery, flights) was ignored at 0.9+ confidence whenever the email LOOKED like an order
+  receipt: Wolt food receipts, Atlassian/Namecheap SaaS orders, and a flight booking all came back
+  `is_order_related: true`. Adding a required `product_kind` enum to `response_json_schema`
+  (physical_goods / food_or_grocery_delivery / digital_or_saas / service_or_booking / other) fixed
+  it completely: every one of the same emails was tagged with the right kind at confidence 1, and
+  the relevance decision moved into backend code keyed on that enum. Rule of thumb for InvokeLLM:
+  make the model NAME facts via schema enums; never ask it to fold an exclusion policy into a
+  boolean.
+
 - 2026-07-22 (CLI 0.1.5, live, repro'd 3x): **A `function.jsonc` in the function folder breaks
   `base44/shared/` imports at deploy.** With `base44/functions/inbox/sweep/{entry.ts,function.jsonc}`,
   deploy fails server-side with `Cannot import "../../../shared/gmail.ts": it must reference a file
@@ -94,6 +113,17 @@ bugs. On submission day this file becomes the answers to the three required ques
   for unknown emails (200 either way - good), but `POST /auth/resend-otp` answers `User not found`
   for a nonexistent address, so it can be used to enumerate which emails have accounts. Suggestion:
   make resend-otp respond 200 unconditionally, like the reset request does.
+
+- 2026-07-26 (CLI 0.1.5): **`base44 logs --env prod` reports nothing for a CLI-deployed app that is
+  live and serving real users, and the wording implies the app was never shipped.** Our app is
+  deployed with `base44 deploy`, serves real traffic on its `*.base44.app` URL, and runs scheduled
+  workflows daily - yet `--env prod` answers `No production logs found. Has this app been published?`
+  while every real run (user function calls AND scheduled workflow runs) appears under
+  `--env preview`. So for a CLI-first app, "preview" IS production, and the flag that sounds like
+  the live environment is the empty one. That is a genuinely alarming message to read mid-verification
+  (we briefly thought the deployment was gone). Suggestions: (a) note in `--help` and the docs that
+  CLI-deployed apps log under `preview` because `prod` refers to the builder's Publish flow, or
+  (b) make the empty-prod message say so explicitly instead of asking whether the app was published.
 
 - 2026-07-23 (SDK 0.8.3, Node headless): **The realtime `subscribe()` socket connects ANONYMOUSLY
   and silently in Node - zero events, no error - when the token is not passed to `createClient`.**
