@@ -233,7 +233,16 @@ export async function runCorePipeline(
     });
 
     // 4. Irrelevant mail: record and stop (keeps re-forwards idempotent).
-    if (!extraction.is_order_related || extraction.classification === "irrelevant") {
+    // product_kind is the code-level backstop for the classifier's exclusion
+    // rules: only physical parcels get cards. The LLM reliably NAMES what was
+    // bought but unreliably folds exclusions into is_order_related, so the
+    // combination happens here. "other"/missing kinds survive only with hard
+    // logistics evidence (carrier parcel notices name no product).
+    const kind = extraction.product_kind ?? null;
+    const kindAllowed = kind === "physical_goods" ||
+      ((kind === null || kind === "other") &&
+        !!(extraction.tracking_number || extraction.carrier));
+    if (!extraction.is_order_related || extraction.classification === "irrelevant" || !kindAllowed) {
       const rec = await service.EmailRecord.create({
         owner_email: input.ownerEmail,
         gmail_message_id: input.gmailMessageId,
@@ -293,6 +302,26 @@ export async function runCorePipeline(
       decision = matched
         ? { kind: "matched_order", orderId: matched, via: "order_number" }
         : { kind: "new_order" };
+    }
+
+    // Weak classifications (review nags, tips, refund notes, misc) may only
+    // ATTACH to an order that already exists; they never open a card. A flight
+    // "confirmation" tagged other_order_related stops here, not on the board.
+    const CREATE_CLASSIFICATIONS = new Set(["order_confirmation", "shipping_update", "delivery", "delay"]);
+    if (decision.kind === "new_order" && !CREATE_CLASSIFICATIONS.has(extraction.classification)) {
+      const rec = await service.EmailRecord.create({
+        owner_email: input.ownerEmail,
+        gmail_message_id: input.gmailMessageId,
+        thread_id: input.threadId,
+        from_address: input.from,
+        subject: input.subject.slice(0, 490),
+        received_at: input.receivedAt,
+        classification: extraction.classification,
+        parse_status: "unroutable",
+        confidence: extraction.confidence,
+        snippet,
+      });
+      return { status: "unroutable", emailRecordId: rec.id };
     }
 
     // Re-host item images (bounded) before writing items.

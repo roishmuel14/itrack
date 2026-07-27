@@ -21,10 +21,11 @@ import { resolveAfterEpoch } from "../../../shared/syncWindow.ts";
 const BATCH = 20;
 
 // Recall-oriented Gmail search: the LLM classifier is the precision filter,
-// manual add is the net for anything this misses.
+// manual add is the net for anything this misses. Food-delivery senders (wolt
+// etc.) are deliberately excluded: same-day food orders are not trackable parcels.
 const ORDER_QUERY =
-  '(subject:(order OR shipped OR shipping OR delivery OR delivered OR tracking OR package OR הזמנה OR משלוח OR חבילה) ' +
-  'OR from:(amazon OR temu OR aliexpress OR shein OR ebay OR asos OR next OR ikea OR wolt))';
+  '(subject:(order OR shipped OR shipping OR shipment OR delivery OR delivered OR tracking OR package OR הזמנה OR משלוח OR חבילה) ' +
+  'OR from:(amazon OR temu OR aliexpress OR shein OR ebay OR asos OR next OR ikea))';
 
 Deno.serve(async (req) => {
   try {
