@@ -96,8 +96,27 @@ Deno.serve(async (req) => {
     const orders = await service.Order.filter({ owner_email: user.email });
 
     const now = Date.now();
+    // An image mined from the order email IS the product the merchant shipped,
+    // so it is authoritative and is NEVER traded for a web-found picture: a
+    // sharper stock shot is regularly the wrong colourway or variant (a 1000px
+    // Mikasa series photo replaced the red-and-white ball the email showed).
+    // Such an image may only be improved by the SAME asset at a higher
+    // resolution, which is the Amazon CDN size-token rewrite in tier B.
     // deno-lint-ignore no-explicit-any
-    const itemNeeds = (it: any) => !!it?.name && (!it.image_url || (it.image_width ?? 0) < HQ_MIN_PX);
+    const fromEmail = (it: any) => it?.image_source === "email";
+    // deno-lint-ignore no-explicit-any
+    const itemBlank = (it: any) => !!it?.name && !it.image_url;
+    // deno-lint-ignore no-explicit-any
+    const itemWebUpgradable = (it: any) =>
+      !!it?.name && !!it.image_url && !fromEmail(it) && (it.image_width ?? 0) < HQ_MIN_PX;
+    // deno-lint-ignore no-explicit-any
+    const itemCdnUpgradable = (it: any) =>
+      !!it?.name && !!it.image_url && fromEmail(it) && (it.image_width ?? 0) < HQ_MIN_PX;
+    // deno-lint-ignore no-explicit-any
+    const itemNeeds = (it: any) => itemBlank(it) || itemWebUpgradable(it) || itemCdnUpgradable(it);
+    // What the web tiers (product page, search) are allowed to touch.
+    // deno-lint-ignore no-explicit-any
+    const itemWebEligible = (it: any) => itemBlank(it) || itemWebUpgradable(it);
     // deno-lint-ignore no-explicit-any
     const needsWork = (o: any) => {
       if (o.is_archived || !(o.items ?? []).some(itemNeeds)) return false;
@@ -136,7 +155,7 @@ Deno.serve(async (req) => {
       needy.some((it: any) => !it.product_url) || // link mining
       (cdnCandidate(o) && needy.length > 0) || // Amazon CDN size-token upgrade
       // deno-lint-ignore no-explicit-any
-      needy.some((it: any) => !it.image_url) || // blank restore from the email's own images
+      needy.some(itemBlank) || // blank restore from the email's own images
       logoDeficient(o); // email-header logo piggyback
 
     // One EmailRecord read for the whole run, only when tier B is even possible.
@@ -208,7 +227,7 @@ Deno.serve(async (req) => {
       // candidate would just yield the thumb already stored).
       // deno-lint-ignore no-explicit-any
       const tryEmailImage = async (it: any, srcCandidate: string) => {
-        const blank = !it.image_url;
+        const blank = itemBlank(it);
         const minPx = blank ? EMAIL_MIN_PX : Math.max(HQ_MIN_PX, (it.image_width ?? 0) + 1);
         const urls: string[] = [];
         const cm = srcCandidate.match(AMZN_CDN_RE);
@@ -246,7 +265,7 @@ Deno.serve(async (req) => {
             // deno-lint-ignore no-explicit-any
             const needLinks = needyItems.some((it: any) => !it.product_url) && links.length > 0;
             // deno-lint-ignore no-explicit-any
-            const needImages = images.length > 0 && (wantLogo || needyItems.some((it: any) => !it.image_url));
+            const needImages = images.length > 0 && (wantLogo || needyItems.some(itemBlank));
             let picked = 0;
             let restored = 0;
             if ((needLinks || needImages) && left() > 2000) {
@@ -335,10 +354,12 @@ Deno.serve(async (req) => {
         }
       }
 
-      // Tiers A + C, per still-needy item.
+      // Tiers A + C, per still-needy item. Email-sourced images are skipped
+      // here on purpose: the web may only fill a blank or improve a picture
+      // the web itself provided, never overwrite what the merchant sent.
       let itemsTried = 0;
       for (const it of items) {
-        if (!itemNeeds(it)) continue;
+        if (!itemWebEligible(it)) continue;
         if (itemsTried >= MAX_ITEMS_PER_ORDER) break;
         if (left() < 1500) {
           starved = true;
@@ -371,7 +392,7 @@ Deno.serve(async (req) => {
         if (searches >= MAX_SEARCHES || orderSearches >= MAX_SEARCHES_PER_ORDER || left() < SEARCH_MIN_MS) {
           // The web search is the last route for an item with no image, so a
           // budget-blocked search must not look like a completed attempt.
-          if (!it.image_url) searchStarved = true;
+          if (itemBlank(it)) searchStarved = true;
           starved = true;
           continue;
         }
