@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import BrandMark from '@/components/BrandMark';
+import Barcode from '@/components/Barcode';
 import {
   ArrowRight,
   BellRing,
@@ -31,18 +32,6 @@ function StatusPill({ tone, children }) {
   return (
     <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold tracking-[0.08em] ${STATUS_TONES[tone]}`}>
       {children}
-    </span>
-  );
-}
-
-const BARS = [3, 1, 2, 1, 3, 2, 1, 1, 2, 3, 1, 2, 1, 1, 3, 1, 2, 1, 1, 2];
-
-function Barcode({ className = '' }) {
-  return (
-    <span className={`flex h-5 items-end gap-[2px] ${className}`} aria-hidden="true">
-      {BARS.map((w, i) => (
-        <span key={i} className="h-full bg-foreground/70" style={{ width: `${w}px` }} />
-      ))}
     </span>
   );
 }

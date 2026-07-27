@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, Image as ImageIcon, Mail } from 'lucide-react';
 import { useAuth } from '@/api/auth';
 import { invokeFunction } from '@/api/functions';
+import { runImageEnrichment } from '@/api/enrichment';
 import { useToast } from '@/lib/toast';
 import { GMAIL_CONNECT_ENABLED } from '@/lib/config';
 import { Button } from '@/components/ui/button';
@@ -30,27 +31,21 @@ export default function Settings() {
     }
   };
 
-  // The function is bounded per call so it cannot time out, so loop until it
-  // reports nothing left. Stop on zero progress too: rows inside their recheck
-  // cooldown keep `remaining` positive and would otherwise spin forever.
-  const refreshLogos = async () => {
+  // Both repair functions are bounded per call, so runImageEnrichment loops
+  // them until they report nothing left (logos first, then product photos).
+  const refreshImages = async () => {
     setLogoBusy(true);
-    let processed = 0;
-    let updated = 0;
     try {
-      for (let round = 0; round < 25; round++) {
-        const res = await invokeFunction('orders/backfillImages', {});
-        processed += res.processed ?? 0;
-        updated += res.updated ?? 0;
-        setLogoProgress({ processed, updated });
-        if (!res.has_more || (res.processed ?? 0) === 0) break;
-      }
+      const res = await runImageEnrichment({ onProgress: setLogoProgress });
+      const total = res.logosUpdated + res.photosUpdated;
       toast.success(
-        updated > 0 ? `Updated ${updated} logo${updated === 1 ? '' : 's'}` : 'Logos are already up to date',
-        updated > 0 ? 'Your cards should look sharper now.' : undefined,
+        total > 0
+          ? `Updated ${res.logosUpdated} logo${res.logosUpdated === 1 ? '' : 's'} and ${res.photosUpdated} photo${res.photosUpdated === 1 ? '' : 's'}`
+          : 'Images are already up to date',
+        total > 0 ? 'Your cards should look sharper now.' : undefined,
       );
     } catch (err) {
-      toast.notifyError(err, 'Cannot refresh logos');
+      toast.notifyError(err, 'Cannot refresh images');
     } finally {
       setLogoBusy(false);
       setLogoProgress(null);
@@ -124,16 +119,17 @@ export default function Settings() {
       <div className="bg-card rounded-2xl border card-shadow p-5 mb-4">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <p className="font-semibold text-sm">Merchant logos</p>
+            <p className="font-semibold text-sm">Merchant logos and product photos</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Fetches each store's own icon at full resolution for orders that have no logo or a blurry one.
+              Fetches each store's own icon at full resolution and follows product links from your order
+              emails to pull high-resolution photos for the cards.
             </p>
           </div>
-          <Button variant="outline" onClick={refreshLogos} disabled={logoBusy}>
+          <Button variant="outline" onClick={refreshImages} disabled={logoBusy}>
             <ImageIcon className="w-4 h-4 me-1.5" />
             {logoBusy
               ? `Refreshing${logoProgress ? ` (${logoProgress.updated}/${logoProgress.processed})` : ''}...`
-              : 'Refresh logos'}
+              : 'Refresh images'}
           </Button>
         </div>
       </div>

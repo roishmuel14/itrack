@@ -12,10 +12,14 @@
     "merchant_domain": { "type": "string", "description": "e.g. amazon.com; merge key part" },
     "logo_domain":     { "type": "string", "description": "Domain used ONLY to fetch the merchant logo (often sender-derived); never a merge key" },
     "logo_url":        { "type": "string", "description": "Re-hosted merchant logo" },
-    "logo_source":     { "type": "string", "description": "Where logo_url came from: site_icon | apple_touch | manifest | well_known | google_favicon. Drives the sharp-logo upgrade pass" },
+    "logo_source":     { "type": "string", "description": "Where logo_url came from: site_icon | apple_touch | manifest | well_known | duckduckgo | google_favicon | web_search | email_header. Drives the sharp-logo upgrade pass" },
     "logo_width":      { "type": "integer", "description": "Measured min(width,height) of the stored logo in px; under 48 means blurry" },
     "logo_attempts":   { "type": "integer", "default": 0, "description": "Logo resolution attempts by orders/backfillImages; capped so hopeless domains stop being retried" },
     "logo_checked_at": { "type": "string", "format": "date-time", "description": "Last logo resolution attempt; the self-healing cursor for the backfill loop" },
+    "logo_ladder_version": { "type": "integer", "description": "Logo ladder generation that last touched this row; bumping LOGO_LADDER_VERSION in backfillImages reopens exhausted attempts exactly once" },
+    "image_attempts":   { "type": "integer", "default": 0, "description": "Product-image enrichment attempts by orders/enrichProductImages; capped so hopeless orders stop being retried" },
+    "image_checked_at": { "type": "string", "format": "date-time", "description": "Last product-image enrichment attempt; cooldown cursor for the enrich loop" },
+    "image_enrich_version": { "type": "integer", "description": "Enrichment generation that last touched this row; bumping ENRICH_VERSION in orders/enrichProductImages reopens attempt-exhausted rows exactly once (mirrors logo_ladder_version)" },
     "order_number":    { "type": "string", "description": "Merchant order id; merge key part" },
     "ordered_at":      { "type": "string", "format": "date-time" },
     "currency":        { "type": "string", "default": "USD" },
@@ -33,10 +37,21 @@
       "items": {
         "type": "object",
         "properties": {
-          "name":      { "type": "string" },
-          "qty":       { "type": "integer", "default": 1 },
-          "price":     { "type": "number" },
-          "image_url": { "type": "string", "description": "Re-hosted via UploadFile" }
+          "name":         { "type": "string" },
+          "qty":          { "type": "integer", "default": 1 },
+          "price":        { "type": "number" },
+          "image_url":    { "type": "string", "description": "Re-hosted via UploadFile" },
+          "image_width":  { "type": "integer", "description": "Measured min(width,height) px of the stored image; >=256 counts as HQ" },
+          // Load-bearing, not descriptive: "email" marks the photo the merchant
+          // themselves sent, which orders/enrichProductImages treats as
+          // authoritative and never replaces with a web-found picture. Kept as
+          // an enum so a typo cannot silently forfeit that guarantee.
+          "image_source": {
+            "type": "string",
+            "enum": ["email", "product_page", "search"],
+            "description": "email (ingest thumbnail or restored from the original email) | product_page | search"
+          },
+          "product_url":  { "type": "string", "description": "Product page link mined from the order email (may be a tracking redirector); consumed by orders/enrichProductImages, never rendered as an image" }
         }
       }
     },

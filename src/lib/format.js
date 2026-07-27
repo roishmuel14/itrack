@@ -79,9 +79,23 @@ export const TONE_CLASSES = {
   neutral: 'text-[hsl(var(--status-neutral))] bg-[hsl(var(--status-neutral-bg))]',
 };
 
+// Text-only variant for chips that sit on their own surface (glass over imagery).
+export const TONE_TEXT_CLASSES = {
+  delivered: 'text-[hsl(var(--status-delivered))]',
+  transit: 'text-[hsl(var(--status-transit))]',
+  soon: 'text-[hsl(var(--status-soon))]',
+  overdue: 'text-[hsl(var(--status-overdue))]',
+  neutral: 'text-[hsl(var(--status-neutral))]',
+};
+
+// The one chip anatomy, identical to the landing's StatusPill metrics: mono
+// micro uppercase in a full pill. Compose with a TONE_* class per use.
+export const CHIP_BASE =
+  'inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-[0.08em]';
+
 export function statusChip(status) {
   const meta = STATUS_META[status] ?? { label: status, tone: 'neutral' };
-  return { label: meta.label, className: TONE_CLASSES[meta.tone] };
+  return { label: meta.label, className: TONE_CLASSES[meta.tone], textClassName: TONE_TEXT_CLASSES[meta.tone] };
 }
 
 // Progress percent from ordered_at to promised_date, clamped 2-100.

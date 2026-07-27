@@ -72,7 +72,7 @@
   }
 }
 
-/* ---------- Landing page ----------
+/* ---------- Shared brand language (landing + app) ----------
    Display type: Archivo, slightly condensed, heavy, tight. The mono face is
    reserved for operational data (tracking numbers, ETAs, kickers, buttons),
    the way real shipping labels set their machine data. */
@@ -159,5 +159,47 @@
     opacity: 1;
     transform: none;
     transition: none;
+  }
+}
+
+/* ---------- Dashboard: the Live Manifest surface ---------- */
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Tonal (not black) scrim so glass chips stay legible over product photos. */
+.hero-scrim {
+  background: linear-gradient(
+    to top,
+    hsl(224 25% 12% / 0.5),
+    hsl(224 25% 12% / 0.14) 42%,
+    transparent 68%
+  );
+}
+
+/* Dashed route track under card progress fills: the road still ahead. The
+   dashes march on card hover only, so this needs no reduced-motion override
+   beyond the no-preference gate. */
+.route-track {
+  height: 3px;
+  border-radius: 9999px;
+  background-image: repeating-linear-gradient(
+    to right,
+    hsl(var(--muted-foreground) / 0.35) 0 5px,
+    transparent 5px 11px
+  );
+}
+@keyframes track-march {
+  to {
+    background-position: -16px 0;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .group:hover .route-track {
+    animation: track-march 1.1s linear infinite;
   }
 }

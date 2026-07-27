@@ -7,6 +7,8 @@
 // measure the bytes it fetched before deciding whether to keep them, without
 // downloading every candidate twice.
 
+import { shortSide } from "./imageSize.ts";
+
 const MAX_BYTES = 5 * 1024 * 1024; // product images; well under the 50MB cap
 const FETCH_TIMEOUT_MS = 10000;
 const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
@@ -93,7 +95,23 @@ export async function uploadImage(
   }
 }
 
-export async function rehostImage(base44: Base44Client, url: string): Promise<string | null> {
+export interface RehostedImage {
+  url: string;
+  width: number; // measured min(w,h) in px; 0 when the format defeated imageSize
+}
+
+// Fetch + measure + upload in one pass. The measurement happens on bytes already
+// in memory, so it costs nothing extra and lets callers record how sharp the
+// stored image actually is (drives the HQ upgrade pass in enrichProductImages).
+export async function rehostImageMeasured(base44: Base44Client, url: string): Promise<RehostedImage | null> {
   const img = await fetchImageBytes(url);
-  return img ? await uploadImage(base44, img, "item") : null;
+  if (!img) return null;
+  const width = shortSide(img.bytes);
+  const hosted = await uploadImage(base44, img, "item");
+  return hosted ? { url: hosted, width } : null;
+}
+
+export async function rehostImage(base44: Base44Client, url: string): Promise<string | null> {
+  const rehosted = await rehostImageMeasured(base44, url);
+  return rehosted?.url ?? null;
 }
