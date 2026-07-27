@@ -13,9 +13,18 @@ export const CLASSIFICATIONS = [
   "irrelevant",
 ] as const;
 
+export const PRODUCT_KINDS = [
+  "physical_goods",
+  "food_or_grocery_delivery",
+  "digital_or_saas",
+  "service_or_booking",
+  "other",
+] as const;
+
 export interface ExtractionResult {
   is_order_related: boolean;
   classification: (typeof CLASSIFICATIONS)[number];
+  product_kind: (typeof PRODUCT_KINDS)[number] | null;
   merchant_name: string | null;
   merchant_domain: string | null;
   order_number: string | null;
@@ -36,8 +45,13 @@ export interface ExtractionResult {
 export const EXTRACTION_SCHEMA = {
   type: "object",
   properties: {
-    is_order_related: { type: "boolean", description: "Is this email about a purchase/order/delivery the recipient made?" },
+    is_order_related: { type: "boolean", description: "Is this email about a purchase of PHYSICAL goods shipped (or to be shipped) to the recipient? false for SaaS/digital/services/bills/food delivery" },
     classification: { type: "string", enum: [...CLASSIFICATIONS] },
+    product_kind: {
+      type: "string",
+      enum: [...PRODUCT_KINDS],
+      description: "What was purchased. physical_goods = tangible items shipped, couriered, or awaiting store/locker pickup (a carrier's parcel notification always counts); food_or_grocery_delivery = restaurant, food-app, or supermarket/grocery orders; digital_or_saas = software, subscriptions, licenses, domains, hosting, digital content; service_or_booking = flights, hotels, events, insurance, utilities, rides; other = none of these or unclear",
+    },
     merchant_name: { type: ["string", "null"], description: "Store/brand name, e.g. Amazon" },
     merchant_domain: { type: ["string", "null"], description: "Bare domain, e.g. amazon.com; null if unknown" },
     order_number: { type: ["string", "null"], description: "Merchant order id exactly as written" },
@@ -61,8 +75,8 @@ export const EXTRACTION_SCHEMA = {
     },
     currency: { type: ["string", "null"], description: "ISO code like USD, ILS, EUR" },
     total: { type: ["number", "null"] },
-    promised_date: { type: ["string", "null"], description: "Merchant-promised delivery date, ISO YYYY-MM-DD" },
-    eta_date: { type: ["string", "null"], description: "Latest ETA in the email, ISO YYYY-MM-DD" },
+    promised_date: { type: ["string", "null"], description: "Merchant-promised delivery/arrival date, ISO YYYY-MM-DD. Never a payment due, renewal, or billing date" },
+    eta_date: { type: ["string", "null"], description: "Latest delivery ETA in the email, ISO YYYY-MM-DD. Never a payment due, renewal, or billing date" },
     event_date: { type: ["string", "null"], description: "When the described event happened per the email itself (order placed / shipped / delivered date), ISO 8601; null if not stated. For forwarded emails prefer the ORIGINAL message's date over the forward date." },
     carrier: { type: ["string", "null"], description: "Carrier name as written, e.g. UPS" },
     tracking_number: { type: ["string", "null"] },
@@ -73,8 +87,38 @@ export const EXTRACTION_SCHEMA = {
     confidence: { type: "number", description: "0-1 confidence in the extraction overall" },
     notes: { type: ["string", "null"], description: "Anything ambiguous worth flagging" },
   },
-  required: ["is_order_related", "classification", "confidence"],
+  required: ["is_order_related", "classification", "product_kind", "confidence"],
 };
+
+// ------------------------------------------------------------- policy gates
+// Kept beside the schema so the enum, the prompt, and the code acting on them
+// stay in one file. Tested in scripts/tests/extractGates.test.ts.
+
+// Classifications allowed to OPEN a card. Everything else (seller messages,
+// refund notes, misc) may only attach to an existing order (PRD v1.4).
+export const CREATE_CLASSIFICATIONS: ReadonlySet<string> = new Set([
+  "order_confirmation",
+  "shipping_update",
+  "delivery",
+  "delay",
+]);
+
+export function canCreateOrder(classification: string): boolean {
+  return CREATE_CLASSIFICATIONS.has(classification);
+}
+
+// Only physical parcels get cards (PRD v1.4). "other"/missing kinds survive on
+// hard logistics evidence alone, because carrier parcel notices name no
+// product; a NAMED exclusion kind (food, SaaS, booking) is final and is never
+// overridden by evidence.
+export function isTrackablePurchase(
+  e: Pick<ExtractionResult, "product_kind" | "tracking_number" | "carrier">,
+): boolean {
+  const kind = e.product_kind ?? null;
+  if (kind === "physical_goods") return true;
+  if (kind === null || kind === "other") return !!(e.tracking_number || e.carrier);
+  return false;
+}
 
 export interface EmailForExtraction {
   from: string;
@@ -86,15 +130,42 @@ export interface EmailForExtraction {
 
 export function buildExtractionPrompt(email: EmailForExtraction): string {
   return [
-    "You are the email parser of a package-tracking app. Analyze ONE email and extract structured order/delivery facts.",
+    "You are the email classifier and parser of a PACKAGE-tracking app. The app tracks physical parcels shipped to the recipient. Analyze ONE email: first decide whether it is about a physical-goods order or shipment, then extract structured facts.",
     "",
-    "Rules:",
+    "STEP 1 - DECIDE. The subject line proves nothing: this email was pre-filtered by broad keywords like 'order', 'shipping', 'delivery', so SaaS invoices, subscription renewals, bills, and promos slip through. Judge by the BODY. Real shipment evidence:",
+    "- Arrival-date phrases: 'estimated delivery', 'expected delivery date', 'delivery date', 'arriving', 'arrives by', 'expected by', 'get it by', 'estimated arrival', 'ETA', 'ships by', 'out for delivery', 'delivered on'; Hebrew: 'תאריך אספקה', 'מועד אספקה', 'זמן אספקה', 'תאריך משוער', 'תאריך הגעה', 'הגעה משוערת', 'צפוי להגיע', 'יגיע עד', 'אספקה עד', 'בדרך אליך', 'נשלחה', 'נמסרה'.",
+    "- Logistics evidence: tracking number, carrier name (UPS, FedEx, DHL, USPS, Israel Post / דואר ישראל, HFD, Cheetah and similar), shipping address, 'your package', 'has shipped', 'on its way', customs, pickup point / נקודת איסוף, parcel locker.",
+    "- Physical goods: named products with quantity, size, or color that must physically ship.",
+    "- Pickup counts too: 'ready for pickup/collection', 'מוכנה לאיסוף', locker and pickup-point notices are part of the delivery flow (suggest status out_for_delivery).",
+    "",
+    "ALWAYS set product_kind; it decides whether a card is created, so answer it purely from WHAT WAS BOUGHT, independent of how order-like the email sounds:",
+    "- physical_goods: tangible items shipped, couriered, or awaiting store/locker pickup. A carrier's parcel notification (Israel Post, FedEx, UPS...) is always physical_goods even when it names no product.",
+    "- food_or_grocery_delivery: restaurant and food-app orders (Wolt, 10bis) AND supermarket/grocery orders (e.g. חצי חינם) - even scheduled next-day slots.",
+    "- digital_or_saas: software, subscriptions, licenses, domains, hosting, cloud, digital content.",
+    "- service_or_booking: flights, hotels, car rentals, events, insurance, utilities, rides.",
+    "- other: none of the above, or genuinely unclear.",
+    "",
+    "STEP 2 - DISTINGUISH DATE TYPES. 'Due date', 'payment due', 'amount due', 'auto-renews on', 'billing date', 'לתשלום עד', 'תאריך חיוב', 'מועד תשלום' are PAYMENT dates, not delivery dates. An email whose only date is a payment, renewal, or billing date is an invoice or subscription notice, NOT a delivery. Never place such a date in promised_date or eta_date.",
+    "",
+    "is_order_related = true ONLY for a specific purchase of physical goods that will be, is being, or was shipped to the recipient (including delay notices, seller messages, and refund updates on such orders). An order confirmation for physical goods counts even when no delivery date is stated yet.",
+    "",
+    "Always classification 'irrelevant' (is_order_related = false):",
+    "- SaaS, software, hosting, domains, and any subscription purchase, renewal, invoice, or receipt.",
+    "- Digital products: licenses, e-books, online courses, gift cards, in-game credits, app purchases, digital tickets.",
+    "- Bills and services: utilities, phone/internet, insurance, bank and payment-app notifications with no shipped goods.",
+    "- Same-day food or grocery delivery (Wolt, 10bis, restaurant orders) and ride-hailing.",
+    "- Travel and bookings: flights, hotels, car rentals, event reservations.",
+    "- Marketing: promotions, deals, coupons, newsletters, cart-abandonment, back-in-stock, price-drop, wishlist, recommendations, review/feedback requests.",
+    "- Account emails: registration, password, security, terms or policy updates.",
+    "When evidence is ambiguous, choose 'irrelevant': a real shipment email almost always names a merchant plus at least one of order number, tracking number, ordered items, or an arrival-date phrase. A missed email can be added manually; a wrong card pollutes the dashboard.",
+    "",
+    "STEP 3 - EXTRACT (only when relevant):",
     "- Extract ONLY what the email states. Never guess or invent values; use null when absent.",
     "- Dates: resolve to ISO format (YYYY-MM-DD) using the reference date for relative phrases like 'arriving tomorrow'. A date range like 'Jul 25 - Aug 2' means promised_date is the LAST day.",
+    "- promised_date / eta_date come from arrival-date phrases only, never from payment or billing dates.",
     "- items[].image_url: pick from the numbered image candidates below ONLY if it clearly shows that product; otherwise null. Never output any other URL.",
-    "- classification 'irrelevant' means not about a specific purchase of the recipient (newsletters, promos, receipts for subscriptions count as irrelevant unless they confirm a shippable order).",
     "- status_suggestion maps what happened: confirmation->ordered, 'shipped/on its way'->shipped, carrier scan updates->in_transit, 'out for delivery'->out_for_delivery, 'delivered'->delivered, delay notices->delayed.",
-    "- confidence reflects how sure you are of the WHOLE extraction (0-1). Clean merchant emails are typically >0.8; forwarded, truncated, or odd emails lower it.",
+    "- confidence reflects how sure you are of the WHOLE extraction (0-1). Clean merchant emails are typically >0.8; forwarded, truncated, or odd emails lower it. If you hesitated between relevant and irrelevant, keep it at or below 0.6.",
     "- event_date: the date the described event actually happened per the email content (e.g. the original message date in a forwarded email), not when it was forwarded.",
     "",
     `Reference date (today): ${email.today}`,
