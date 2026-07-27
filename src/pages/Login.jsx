@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Package } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '@/api/auth';
 import { useToast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import BrandMark from '@/components/BrandMark';
 
 // Built-in Base44 auth with minimal branding (PRD section 10.1):
 // email/password login, registration with OTP verification, Google OAuth,
@@ -142,12 +143,10 @@ export default function Login() {
     <div className="min-h-screen grid place-items-center px-4 py-10">
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-primary grid place-items-center card-shadow mb-3">
-            <Package className="w-7 h-7 text-primary-foreground" />
-          </div>
-          <h1 className="text-2xl font-extrabold tracking-tight">iTrack</h1>
+          <BrandMark markClass="w-16 h-16" wordmark={false} className="mb-3" />
+          <h1 className="font-display text-2xl font-extrabold tracking-tight">iTrack</h1>
           <p className="text-muted-foreground text-sm mt-1 text-center">
-            Every package you're waiting for, in one place.
+            Every package you're waiting for, live on one screen.
           </p>
         </div>
 
@@ -280,6 +279,11 @@ export default function Login() {
               Back to sign in
             </button>
           )}
+        </p>
+        <p className="text-center text-sm mt-2">
+          <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors">
+            Back to home
+          </Link>
         </p>
       </div>
     </div>
