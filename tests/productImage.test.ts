@@ -1,5 +1,10 @@
 import { assertEquals } from "jsr:@std/assert";
-import { extractPageImageCandidates, sanitizePageUrls, validateAssetPicks } from "../base44/shared/productImage.ts";
+import {
+  extractPageImageCandidates,
+  isBannerShaped,
+  sanitizePageUrls,
+  validateAssetPicks,
+} from "../base44/shared/productImage.ts";
 
 const BASE = "https://shop.example.com/products/dog-bed";
 
@@ -69,6 +74,15 @@ Deno.test("extractPageImageCandidates: caps at 4 and skips non-http", () => {
   assertEquals(extractPageImageCandidates(`<meta property="og:image" content="data:image/png;base64,x">`, BASE), []);
 });
 
+Deno.test("isBannerShaped: only wide LANDSCAPE images are banners", () => {
+  // The real regression: a 12kg dog-food sack shot upright, ratio 1.85.
+  assertEquals(isBannerShaped(384, 710), false, "tall product photo is not a banner");
+  assertEquals(isBannerShaped(1200, 589), true, "wide store banner is a banner");
+  assertEquals(isBannerShaped(1000, 1000), false, "square product photo");
+  assertEquals(isBannerShaped(800, 500), false, "mildly wide photo stays allowed");
+  assertEquals(isBannerShaped(300, 2000), false, "extreme portrait still allowed");
+});
+
 Deno.test("sanitizePageUrls: dedupes by registrable domain, drops generic hosts and junk, caps at 3", () => {
   assertEquals(
     sanitizePageUrls([
@@ -87,6 +101,23 @@ Deno.test("sanitizePageUrls: dedupes by registrable domain, drops generic hosts 
     ],
   );
   assertEquals(sanitizePageUrls("nope"), []);
+});
+
+Deno.test("sanitizePageUrls: drops domains already proven unusable for the item", () => {
+  const raw = [
+    "https://joybox.co.il/product/monge-salmon",
+    "https://www.zooplus.co.uk/shop/dogs/monge",
+    "https://www.monge.it/prodotto/salmone",
+  ];
+  // Exclusion accepts a bare domain or a full URL from the dead attempt.
+  assertEquals(sanitizePageUrls(raw, 3, ["joybox.co.il"]), [
+    "https://www.zooplus.co.uk/shop/dogs/monge",
+    "https://www.monge.it/prodotto/salmone",
+  ]);
+  assertEquals(sanitizePageUrls(raw, 3, ["https://joybox.co.il/_t/c/v3/TOKEN"]), [
+    "https://www.zooplus.co.uk/shop/dogs/monge",
+    "https://www.monge.it/prodotto/salmone",
+  ]);
 });
 
 Deno.test("validateAssetPicks: bounds-checks, duplicate image claims drop all, logo collision drops both", () => {

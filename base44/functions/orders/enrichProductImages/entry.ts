@@ -48,9 +48,11 @@ const PER_ORDER_BUDGET_MS = 12_000;
 const MAX_ATTEMPTS = 3; // per order, lifetime (image_attempts): stops hopeless orders looping
 const RECHECK_MS = 7 * 24 * 60 * 60 * 1000; // do not retry the same order within a week
 const MAX_ITEMS_PER_ORDER = 3;
-const MAX_SEARCHES = 2; // internet-context LLM calls per invocation
+const MAX_SEARCHES = 3; // internet-context LLM calls per invocation
+const MAX_SEARCHES_PER_ORDER = 1; // so the first orders in the queue cannot eat the whole budget
+const SEARCH_MIN_MS = 7000; // an internet-context call runs ~10s: do not start one we cannot use
 const MAX_GMAIL_FETCHES = 4;
-const ENRICH_VERSION = 2; // v2: email restore + email-header logo + search fan-out + banner ban
+const ENRICH_VERSION = 3; // v3: product-first merchant-agnostic search + starved-search defer
 const LOGO_BLURRY_PX = 48; // mirror of backfill's BLURRY_PX for the piggyback logo tier
 const PER_PAGE_FANOUT_MS = 4000; // one hanging host must not eat the order budget
 
@@ -195,6 +197,9 @@ Deno.serve(async (req) => {
       // so the next invocation retries them with fresh budgets.
       let attempted = false;
       let starved = false;
+      let searchStarved = false; // a blank item's last route (web search) never ran
+      let learnedNewUrl = false; // a search named a fresh page we have not fetched yet
+      let orderSearches = 0;
 
       // Try one email image candidate for an item: Amazon CDN size-token
       // variants first (full-size original), then the raw thumb for blanks.
@@ -363,17 +368,24 @@ Deno.serve(async (req) => {
           console.log(`enrich tierA ${o.merchant_name}: no image >= ${minPx}px from ${host(it.product_url)}`);
         }
 
-        if (searches >= MAX_SEARCHES || left() < 3000) {
+        if (searches >= MAX_SEARCHES || orderSearches >= MAX_SEARCHES_PER_ORDER || left() < SEARCH_MIN_MS) {
+          // The web search is the last route for an item with no image, so a
+          // budget-blocked search must not look like a completed attempt.
+          if (!it.image_url) searchStarved = true;
           starved = true;
           continue;
         }
         searches++;
+        orderSearches++;
         attempted = true;
         const hit = await searchProductOnline(base44, {
           itemName: it.name,
           merchantName: o.merchant_name,
           merchantDomain: o.merchant_domain || o.logo_domain,
           currency: o.currency,
+          // The link we just failed on is proven unusable for this item, so
+          // the search must propose somewhere else rather than the same host.
+          excludeDomains: it.product_url ? [it.product_url] : [],
         });
         let got = hit?.image_url
           ? await fetchAndUploadIfLarge(base44, hit.image_url, minPx, left(), "item", ITEM_MAX_ASPECT)
@@ -416,11 +428,38 @@ Deno.serve(async (req) => {
           if (fresh && it.product_url !== fresh) {
             it.product_url = fresh;
             changed = true;
+            learnedNewUrl = true;
           }
         }
       }
 
-      if (!upgraded && !logoWin && !attempted && starved) {
+      // Defer when a route this order still needs never ran: either nothing was
+      // attempted at all, or a blank item's LAST route (the web search) was
+      // budget-blocked. Stamping an attempt there would cooldown-lock the item
+      // for a week over a scheduling accident rather than a real failure. Any
+      // work already done (mined product_urls, a logo win) is still persisted;
+      // only the attempt counter and the cooldown are withheld.
+      if (!upgraded && (searchStarved || learnedNewUrl || (!attempted && starved))) {
+        const deferPatch: Record<string, unknown> = {};
+        if (changed) deferPatch.items = items;
+        if (logoWin) {
+          deferPatch.logo_url = logoWin.url;
+          deferPatch.logo_width = logoWin.width;
+          deferPatch.logo_source = "email_header";
+          updated++;
+        }
+        if (learnedNewUrl) {
+          // A search named a page we have never fetched (typically the
+          // manufacturer's own product page after the merchant's site failed).
+          // Fetching it is cheap tier A work, so clear the cooldown to retry it
+          // on the very next round instead of parking a promising lead for a
+          // week. Attempts still increment, so this converges within
+          // MAX_ATTEMPTS rather than looping on fresh URLs forever.
+          deferPatch.image_attempts = (o.image_attempts ?? 0) + 1;
+          deferPatch.image_checked_at = null;
+          deferPatch.image_enrich_version = ENRICH_VERSION;
+        }
+        if (Object.keys(deferPatch).length > 0) await service.Order.update(o.id, deferPatch);
         deferred++;
         continue;
       }

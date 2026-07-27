@@ -13,6 +13,7 @@
 import { fetchImageBytes, isSafePublicHttpUrl, uploadImage, type FetchedImage } from "./rehost.ts";
 import { BROWSERISH_HEADERS, readCapped, type ResolvedLogo } from "./merchantLogo.ts";
 import { imageSize } from "./imageSize.ts";
+import { registrableDomain } from "./senderDomain.ts";
 import type { EmailImageCandidate } from "./htmlToText.ts";
 
 // deno-lint-ignore no-explicit-any
@@ -22,10 +23,18 @@ export const HQ_MIN_PX = 256; // an image this sharp counts as HQ (replacement g
 export const FILL_MIN_PX = 128; // acceptance gate when the item has no image at all
 export const EMAIL_MIN_PX = 96; // floor for images restored from the order email itself (provenance-perfect)
 
-// Banner shape: standard og share cards are 1.91:1. A candidate this wide is
-// more likely a store brand card than a product photo, so item images reject
-// or deprioritize it (logos may be as wide as they like).
+// Banner shape: standard og share cards are 1.91:1 and always LANDSCAPE, so an
+// image wider than this is more likely a store brand card than a product photo.
+// The orientation check is load-bearing: a 12kg sack of dog food photographed
+// upright is 384x710 (ratio 1.85), and an earlier version that ignored
+// orientation threw that real product shot away as a "banner". Portrait images
+// are never share cards, so they are always allowed.
 export const ITEM_MAX_ASPECT = 1.8;
+
+// True only for wide landscape images, the shape a store banner actually takes.
+export function isBannerShaped(w: number, h: number, maxAspect = ITEM_MAX_ASPECT): boolean {
+  return w > h && w / Math.max(1, h) > maxAspect;
+}
 
 const PAGE_TIMEOUT_MS = 4000;
 const MAX_PAGE_BYTES = 512 * 1024;
@@ -209,7 +218,7 @@ export async function fetchAndUploadIfLarge(
   if (!dims) return null;
   const width = Math.min(dims.w, dims.h);
   if (width < minPx) return null;
-  if (maxAspect && Math.max(dims.w, dims.h) / Math.max(1, width) > maxAspect) return null;
+  if (maxAspect && isBannerShaped(dims.w, dims.h, maxAspect)) return null;
   const hosted = await uploadImage(base44, img, prefix);
   return hosted ? { url: hosted, width } : null;
 }
@@ -245,7 +254,7 @@ export async function fetchProductPageImage(
     if (!dims) continue;
     const width = Math.min(dims.w, dims.h);
     if (width < minPx) continue;
-    if (Math.max(dims.w, dims.h) / Math.max(1, width) <= ITEM_MAX_ASPECT) {
+    if (!isBannerShaped(dims.w, dims.h)) {
       const hosted = await uploadImage(base44, img, opts.prefix ?? "item");
       return hosted ? { url: hosted, width } : null;
     }
@@ -274,7 +283,7 @@ function usableSearchUrl(raw: unknown): string | null {
   if (!isSafePublicHttpUrl(raw)) return null;
   try {
     const host = new URL(raw).hostname.toLowerCase().replace(/^www\./, "");
-    const reg = host.split(".").slice(-2).join(".");
+    const reg = registrableDomain(host);
     if (GENERIC_SEARCH_HOSTS.has(host) || GENERIC_SEARCH_HOSTS.has(reg)) return null;
   } catch (_) {
     return null;
@@ -282,22 +291,42 @@ function usableSearchUrl(raw: unknown): string | null {
   return raw;
 }
 
+// Registrable domain for dedupe and exclusion checks. Uses senderDomain.ts's
+// suffix-aware helper: naive "last two labels" would fold every .co.il store
+// into "co.il", which would both mis-exclude and silently dedupe two different
+// Israeli retailers down to one in the fan-out. Accepts a full URL or a bare
+// host, so a dead product link can be passed straight through.
+export function pageDomain(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  let host = String(raw).trim().toLowerCase();
+  if (/^https?:\/\//.test(host)) {
+    try {
+      host = new URL(host).hostname;
+    } catch (_) {
+      return null;
+    }
+  }
+  host = host.replace(/^www\./, "").split("/")[0];
+  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(host)) return null;
+  return registrableDomain(host);
+}
+
 // Validate + dedupe LLM-returned page URLs: one page per registrable domain
 // (the whole point of the fan-out is diversifying past a bot-blocked host),
-// order preserved, capped. Exported for unit tests.
-export function sanitizePageUrls(raw: unknown, cap = 3): string[] {
+// order preserved, capped. `exclude` drops domains already proven unusable for
+// this item so a search cannot keep proposing the same dead host.
+// Exported for unit tests.
+export function sanitizePageUrls(raw: unknown, cap = 3, exclude: string[] = []): string[] {
   if (!Array.isArray(raw)) return [];
+  const banned = new Set(exclude.map((d) => pageDomain(d) ?? d.toLowerCase().replace(/^www\./, "")));
   const out: string[] = [];
   const domains = new Set<string>();
   for (const entry of raw) {
     const url = usableSearchUrl(entry);
     if (!url) continue;
-    let reg: string;
-    try {
-      reg = new URL(url).hostname.toLowerCase().replace(/^www\./, "").split(".").slice(-2).join(".");
-    } catch (_) {
-      continue;
-    }
+    const reg = pageDomain(url);
+    if (!reg) continue;
+    if (banned.has(reg)) continue;
     if (domains.has(reg)) continue;
     domains.add(reg);
     out.push(url);
@@ -307,27 +336,43 @@ export function sanitizePageUrls(raw: unknown, cap = 3): string[] {
 }
 
 // Tier C: internet-context LLM search. Returns raw candidate URLs; callers must
-// fetch + measure + rehost them (never store a search URL directly). Asks for
-// up to 3 product pages on DIFFERENT sites because any single retail host may
-// bot-block server fetches; a marketplace or manufacturer page usually won't.
+// fetch + measure + rehost them (never store a search URL directly).
+//
+// PRODUCT-FIRST, MERCHANT-AGNOSTIC (the lesson from JoyBox): what the card
+// needs is a picture of the THING, not a picture hosted by the shop that sold
+// it. An earlier version told the model to prefer the selling merchant's own
+// site, so a Hebrew pet-food line item kept resolving to joybox.co.il, whose
+// email link lands on the store homepage and whose product pages are not
+// server-fetchable, and the item stayed blank. The merchant is now only a hint
+// for IDENTIFYING the product; manufacturer and large-marketplace pages are
+// preferred because they carry clean product photography and answer bots.
 export async function searchProductOnline(
   base44: Base44Client,
-  q: { itemName: string; merchantName?: string | null; merchantDomain?: string | null; currency?: string | null },
+  q: {
+    itemName: string;
+    merchantName?: string | null;
+    merchantDomain?: string | null;
+    currency?: string | null;
+    excludeDomains?: string[]; // domains already proven unusable for this item
+  },
 ): Promise<ProductSearchHit | null> {
   const item = (q.itemName ?? "").trim();
   if (!item) return null;
+  const exclude = (q.excludeDomains ?? []).map((d) => pageDomain(d) ?? d).filter(Boolean) as string[];
   try {
     const result = await base44.asServiceRole.integrations.Core.InvokeLLM({
       prompt: [
-        "Find this exact retail product on the web. Return:",
-        "- product_page_urls: up to 3 URLs of product pages for this EXACT product, each on a DIFFERENT website, preferring in order: (1) the selling merchant's own site, (2) a large marketplace listing (Amazon, eBay, AliExpress, zap.co.il), (3) the manufacturer's official product page. Only pages you actually saw in results; never search-result pages, category pages, social posts, or homepages.",
+        "Find a photograph of this exact product anywhere on the web.",
+        "First work out what the product actually IS: brand, product line, variant, and size. The name is a retail line item and may be in Hebrew or abbreviated; translate and normalize it (for example \"מונג' סלמון ואורז בוגר - 12 ק\\\"ג\" is Monge dog food, Salmon and Rice, adult, 12 kg).",
+        "The image does NOT have to come from the store that sold it: ANY reputable source showing this exact product is fine.",
+        "Return:",
+        "- product_page_urls: up to 3 URLs of pages showing this EXACT product (same brand, line, variant; size may differ if nothing else exists), each on a DIFFERENT website, preferring in order: (1) the manufacturer's or brand's official product page, (2) a large retailer or marketplace listing (Amazon, zooplus, Chewy, eBay, AliExpress, zap.co.il), (3) the selling merchant's own site. Only pages you actually saw in results; never search-result pages, category pages, social posts, or homepages.",
         "- image_url: a DIRECT product photo URL (an actual image file on a CDN, roughly 400px or larger). Only a file URL you actually saw on a page; NEVER construct or guess a CDN path. Usually null.",
-        "The product name may be in Hebrew; search both the Hebrew name and an English translation (brand and model words stay as written).",
         "",
         `Product: ${item}`,
-        q.merchantName ? `Sold by: ${q.merchantName}` : "",
-        q.merchantDomain ? `Merchant site: ${q.merchantDomain}` : "",
-        q.currency === "ILS" ? "Purchased in ILS, so this is likely an Israeli retailer (.co.il sites are common)." : "",
+        q.merchantName ? `Bought from: ${q.merchantName} (identification hint only, not where the image must come from)` : "",
+        q.currency === "ILS" ? "Bought in Israel, so Hebrew listings and .co.il retailers are likely, but international sources are equally good." : "",
+        exclude.length ? `Do NOT return pages on these domains, they were already tried and are unusable: ${exclude.join(", ")}` : "",
       ].filter(Boolean).join("\n"),
       add_context_from_internet: true,
       response_json_schema: {
@@ -343,7 +388,7 @@ export async function searchProductOnline(
     const rec = result as Record<string, unknown>;
     const hit: ProductSearchHit = {
       image_url: usableSearchUrl(rec.image_url),
-      product_page_urls: sanitizePageUrls(rec.product_page_urls),
+      product_page_urls: sanitizePageUrls(rec.product_page_urls, 3, exclude),
     };
     return hit.image_url || hit.product_page_urls.length ? hit : null;
   } catch (_) {
