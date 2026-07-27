@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { MessageCircle, Send, X, Loader2 } from 'lucide-react';
 import { base44 } from '@/api/base44Client';
 import { useToast } from '@/lib/toast';
+import { WHATSAPP_ENABLED } from '@/lib/config';
 
 const AGENT_NAME = 'itrack_assistant';
 const WHATSAPP_ICON = (
@@ -9,6 +10,24 @@ const WHATSAPP_ICON = (
     <path d="M12 2a10 10 0 0 0-8.58 15.13L2 22l4.97-1.38A10 10 0 1 0 12 2Zm5.13 14.16c-.22.62-1.27 1.18-1.78 1.23-.46.04-1.03.06-1.66-.1-.38-.1-.87-.25-1.5-.5-2.65-1.06-4.38-3.7-4.51-3.87-.13-.18-1.08-1.44-1.08-2.75 0-1.3.68-1.94.92-2.2.24-.27.53-.34.7-.34h.5c.16 0 .38-.06.6.45.22.53.75 1.83.82 1.96.06.13.1.29.02.47-.08.18-.13.29-.25.45-.13.15-.27.34-.38.45-.13.13-.26.27-.11.53.15.26.66 1.09 1.42 1.77.98.87 1.8 1.14 2.06 1.27.25.13.4.11.55-.06.15-.18.64-.75.81-1 .17-.26.34-.21.57-.13.24.09 1.5.71 1.76.84.26.13.43.19.49.3.06.1.06.62-.15 1.23Z" />
   </svg>
 );
+
+// The agent answers in light markdown: **bold** labels and "- " bullets. Those
+// two are the only markers it actually emits, and unrendered they show up as
+// literal asterisks in the bubble, so they are handled inline rather than by
+// pulling in a markdown dependency. The bubble keeps whitespace-pre-line, so
+// line breaks still take care of themselves.
+function renderMarkdownish(text) {
+  const withBullets = text.replace(/^[ \t]*-[ \t]+/gm, '• ');
+  const parts = [];
+  let last = 0;
+  for (const match of withBullets.matchAll(/\*\*(.+?)\*\*/g)) {
+    if (match.index > last) parts.push(withBullets.slice(last, match.index));
+    parts.push(<strong key={match.index}>{match[1]}</strong>);
+    last = match.index + match[0].length;
+  }
+  if (last < withBullets.length) parts.push(withBullets.slice(last));
+  return parts;
+}
 
 // Floating assistant chat (PRD F7): in-app conversation with itrack_assistant
 // plus the WhatsApp connect link.
@@ -60,13 +79,10 @@ export default function AssistantChat() {
     }
   };
 
-  const whatsappUrl = (() => {
-    try {
-      return base44.agents.getWhatsAppConnectURL(AGENT_NAME);
-    } catch {
-      return null;
-    }
-  })();
+  // getWhatsAppConnectURL builds the URL synchronously and never throws, even
+  // when the agent has no WhatsApp channel, so the flag is the only thing that
+  // can tell us whether the link goes anywhere.
+  const whatsappUrl = WHATSAPP_ENABLED ? base44.agents.getWhatsAppConnectURL(AGENT_NAME) : null;
 
   return (
     <>
@@ -129,7 +145,7 @@ export default function AssistantChat() {
                     m.role === 'user' ? 'bg-primary text-primary-foreground rounded-br-md' : 'bg-muted rounded-bl-md'
                   }`}
                 >
-                  {m.content}
+                  {m.role === 'assistant' ? renderMarkdownish(m.content) : m.content}
                 </div>
               </div>
             ))}
