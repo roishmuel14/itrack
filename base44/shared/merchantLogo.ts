@@ -13,11 +13,19 @@
 import { fetchImageBytes, uploadImage } from "./rehost.ts";
 import { shortSide } from "./imageSize.ts";
 import { normalizeDomain } from "./mergeEngine.ts";
+import { isNonMerchantDomain, registrableDomain } from "./senderDomain.ts";
 
 // deno-lint-ignore no-explicit-any
 type Base44Client = any;
 
-export type LogoSource = "manifest" | "apple_touch" | "site_icon" | "well_known" | "google_favicon";
+export type LogoSource =
+  | "manifest"
+  | "apple_touch"
+  | "site_icon"
+  | "well_known"
+  | "duckduckgo"
+  | "google_favicon"
+  | "web_search";
 
 export interface ResolvedLogo {
   url: string;
@@ -37,9 +45,10 @@ const MIN_STEP_MS = 700; // do not start a fetch we cannot finish
 const LOGO_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
 // Some CDNs 403 anything that looks automated. Claiming to be a browser here is
-// about getting a public icon, not about evading a paywall; the item-image path
-// keeps its honest iTrack UA.
-const BROWSERISH_HEADERS = {
+// about getting a public icon, not about evading a paywall; the email-thumbnail
+// item-image path keeps its honest iTrack UA. Exported for productImage.ts,
+// which fetches retailer product pages that bot-block the same way.
+export const BROWSERISH_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
   "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -107,7 +116,7 @@ export function parseIconLinks(html: string, baseUrl: string): IconLink[] {
   return out;
 }
 
-async function readCapped(res: Response, max: number): Promise<string> {
+export async function readCapped(res: Response, max: number): Promise<string> {
   const reader = res.body?.getReader();
   if (!reader) return "";
   const chunks: Uint8Array[] = [];
@@ -246,15 +255,85 @@ export async function resolveAndRehostLogo(
     if (await consider(`https://${clean}${p}`, "well_known")) return await finish();
   }
 
-  // Tier 5: the blurry fallback, only when we have nothing usable.
+  // Tier 5: DuckDuckGo's icon service serves the site's ORIGINAL icon file (no
+  // upscaling), so a measured width here is honest, unlike Google s2. When the
+  // origin file is a real ICO the image/x-icon content type fails the LOGO_TYPES
+  // allowlist; acceptable, since imageSize.ts cannot measure ICO anyway.
+  if (bestWidth() < GOOD_ENOUGH_PX) {
+    if (await consider(`https://icons.duckduckgo.com/ip3/${clean}.ico`, "duckduckgo")) return await finish();
+  }
+
+  // Tier 6: the blurry fallback, only when we have nothing usable. Still tagged
+  // google_favicon regardless of measured size: s2 upscales tiny favicons, so
+  // its dimensions are not evidence of sharpness and the backfill must keep
+  // treating the result as upgradeable.
   if (bestWidth() < MIN_ACCEPT_PX) {
     await consider(
-      `https://www.google.com/s2/favicons?domain=${encodeURIComponent(clean)}&sz=128`,
+      `https://www.google.com/s2/favicons?domain=${encodeURIComponent(clean)}&sz=256`,
       "google_favicon",
     );
   }
 
   return await finish();
+}
+
+export interface DomainGuessHints {
+  merchantName: string;
+  senderDomain?: string | null; // even a blocklisted ESP sender is a useful hint
+  currency?: string | null; // ILS implies an Israeli retailer, likely .co.il
+  itemNames?: string[];
+}
+
+// Hosts a lazy web search loves to return that are never a merchant's own site.
+const GUESS_DENYLIST = new Set([
+  "google.com", "facebook.com", "instagram.com", "wikipedia.org", "youtube.com",
+  "twitter.com", "x.com", "linkedin.com", "tiktok.com", "pinterest.com",
+]);
+
+// Ask the LLM (with live web context) for the merchant's official site when the
+// emails never revealed one, e.g. KSP -> ksp.co.il. The answer is only ever
+// written to Order.logo_domain, and only AFTER the ladder actually produced a
+// logo from it, so a wrong guess is never sticky and can never touch merge keys.
+export async function guessMerchantDomain(
+  base44: Base44Client,
+  hints: DomainGuessHints,
+): Promise<string | null> {
+  const name = (hints.merchantName ?? "").trim();
+  if (!name || /^unknown merchant$/i.test(name)) return null;
+  try {
+    const result = await base44.asServiceRole.integrations.Core.InvokeLLM({
+      prompt: [
+        "Return the OFFICIAL website registrable domain for this retail merchant, bare, like ksp.co.il or joybox.co.il.",
+        "Israeli merchants are common here (ILS currency, Hebrew product names): prefer the .co.il domain when that is the real site.",
+        "Never return marketplaces, social networks, mail providers, or search engines. Use null unless you are confident.",
+        "",
+        `Merchant name: ${name}`,
+        hints.senderDomain ? `Their emails came via: ${hints.senderDomain}` : "",
+        hints.currency ? `Purchase currency: ${hints.currency}` : "",
+        hints.itemNames?.length ? `Items they sold: ${hints.itemNames.slice(0, 3).join("; ")}` : "",
+      ].filter(Boolean).join("\n"),
+      add_context_from_internet: true,
+      response_json_schema: {
+        type: "object",
+        properties: {
+          domain: { type: ["string", "null"], description: "Bare registrable domain, or null" },
+          confidence: { type: "number", description: "0-1" },
+        },
+        required: ["domain", "confidence"],
+      },
+    });
+    if (!result || typeof result !== "object") return null;
+    const rec = result as { domain?: unknown; confidence?: unknown };
+    if (typeof rec.domain !== "string" || typeof rec.confidence !== "number") return null;
+    if (rec.confidence < 0.6) return null;
+    const clean = normalizeDomain(rec.domain);
+    if (!clean || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(clean)) return null;
+    if (GUESS_DENYLIST.has(registrableDomain(clean))) return null;
+    if (isNonMerchantDomain(clean)) return null;
+    return clean;
+  } catch (_) {
+    return null;
+  }
 }
 
 // Back-compat shim for the previous helper name. Prefer resolveAndRehostLogo,

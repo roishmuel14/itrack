@@ -4,7 +4,7 @@
 // else. A false positive shows the wrong brand on a card; the blocklist and the
 // eTLD+1 rule exist so an ESP's logo is never mistaken for the merchant's.
 
-import { domainFromSender, registrableDomain } from "../base44/shared/senderDomain.ts";
+import { domainFromSender, isNonMerchantDomain, registrableDomain } from "../base44/shared/senderDomain.ts";
 
 function eq(actual: unknown, expected: unknown, msg: string) {
   if (actual !== expected) throw new Error(`${msg}\n  got:  ${actual}\n  want: ${expected}`);
@@ -25,6 +25,17 @@ Deno.test("registrableDomain collapses to eTLD+1, including multi-part suffixes"
   eq(registrableDomain("mailer.ksp.co.il"), "ksp.co.il", "co.il needs three labels");
   eq(registrableDomain("terminalx.co.il"), "terminalx.co.il", "bare co.il untouched");
   eq(registrableDomain("shop.co.uk"), "shop.co.uk", "bare co.uk untouched");
+});
+
+Deno.test("isNonMerchantDomain: validates LLM domain guesses", () => {
+  eq(isNonMerchantDomain("ksp.co.il"), false, "real Israeli merchant passes");
+  eq(isNonMerchantDomain("fedex.com"), false, "carriers allowed on purpose (FedEx-as-merchant)");
+  eq(isNonMerchantDomain("acme.myshopify.com"), false, "platform SUBDOMAIN is a merchant");
+  eq(isNonMerchantDomain("mailchimp.com"), true, "ESP rejected");
+  eq(isNonMerchantDomain("mail.mailchimp.com"), true, "ESP subdomain rejected via eTLD+1");
+  eq(isNonMerchantDomain("gmail.com"), true, "mailbox provider rejected");
+  eq(isNonMerchantDomain("myshopify.com"), true, "bare platform rejected");
+  eq(isNonMerchantDomain(""), true, "empty rejected");
 });
 
 Deno.test("real merchant senders resolve to the merchant domain", () => {

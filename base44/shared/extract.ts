@@ -20,7 +20,9 @@ export interface ExtractionResult {
   merchant_domain: string | null;
   order_number: string | null;
   event_type: string | null;
-  items: Array<{ name: string; qty: number | null; price: number | null; image_url: string | null }> | null;
+  items: Array<
+    { name: string; qty: number | null; price: number | null; image_url: string | null; product_url?: string | null }
+  > | null;
   currency: string | null;
   total: number | null;
   promised_date: string | null;
@@ -55,6 +57,7 @@ export const EXTRACTION_SCHEMA = {
           qty: { type: ["integer", "null"] },
           price: { type: ["number", "null"] },
           image_url: { type: ["string", "null"], description: "MUST be one of the provided image candidate URLs or null" },
+          product_url: { type: ["string", "null"], description: "MUST be one of the provided link candidate URLs or null" },
         },
         required: ["name"],
       },
@@ -81,6 +84,7 @@ export interface EmailForExtraction {
   subject: string;
   text: string;
   imageCandidates: string[];
+  linkCandidates?: string[];
   today: string; // ISO date, for resolving relative dates
 }
 
@@ -92,6 +96,7 @@ export function buildExtractionPrompt(email: EmailForExtraction): string {
     "- Extract ONLY what the email states. Never guess or invent values; use null when absent.",
     "- Dates: resolve to ISO format (YYYY-MM-DD) using the reference date for relative phrases like 'arriving tomorrow'. A date range like 'Jul 25 - Aug 2' means promised_date is the LAST day.",
     "- items[].image_url: pick from the numbered image candidates below ONLY if it clearly shows that product; otherwise null. Never output any other URL.",
+    "- items[].product_url: pick the link candidate that opens that exact product's page on the store (usually the link wrapping the product image or name). Tracking-wrapped links (click.*, awstrack, etc.) are fine. Never pick order-status, package-tracking, unsubscribe, account, or help links. Null when unsure.",
     "- classification 'irrelevant' means not about a specific purchase of the recipient (newsletters, promos, receipts for subscriptions count as irrelevant unless they confirm a shippable order).",
     "- status_suggestion maps what happened: confirmation->ordered, 'shipped/on its way'->shipped, carrier scan updates->in_transit, 'out for delivery'->out_for_delivery, 'delivered'->delivered, delay notices->delayed.",
     "- confidence reflects how sure you are of the WHOLE extraction (0-1). Clean merchant emails are typically >0.8; forwarded, truncated, or odd emails lower it.",
@@ -104,6 +109,11 @@ export function buildExtractionPrompt(email: EmailForExtraction): string {
     "Image candidates (by index):",
     email.imageCandidates.length
       ? email.imageCandidates.map((u, i) => `${i + 1}. ${u}`).join("\n")
+      : "(none)",
+    "",
+    "Link candidates (by index):",
+    (email.linkCandidates ?? []).length
+      ? (email.linkCandidates ?? []).map((u, i) => `${i + 1}. ${u}`).join("\n")
       : "(none)",
     "",
     "Email text:",

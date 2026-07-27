@@ -1,5 +1,10 @@
 import { assertEquals } from "jsr:@std/assert";
-import { extractImageCandidates, htmlToText, truncateForLLM } from "../../base44/shared/htmlToText.ts";
+import {
+  extractImageCandidates,
+  extractLinkCandidates,
+  htmlToText,
+  truncateForLLM,
+} from "../../base44/shared/htmlToText.ts";
 
 Deno.test("htmlToText: strips tags, scripts, decodes entities, keeps structure", () => {
   const html = `<html><head><title>x</title><style>.a{color:red}</style></head>
@@ -26,6 +31,33 @@ Deno.test("extractImageCandidates: keeps product images, drops pixels and dupes"
     "https://cdn.shop.com/product1.jpg",
     "https://cdn.shop.com/product2.png",
   ]);
+});
+
+Deno.test("extractLinkCandidates: keeps product links incl. redirectors, drops nav/legal/social", () => {
+  const html = `
+    <a href="https://click.email.shop.com/f/a/AbC123?u=https%3A%2F%2Fshop.com%2Fp%2F42">Buy again</a>
+    <a href="https://shop.com/products/dog-bed?variant=7&amp;utm_source=email">EHEYCIGA Dog Bed</a>
+    <a href="https://shop.com/products/dog-bed?variant=7&amp;utm_source=email">dup</a>
+    <a href="https://shop.com/unsubscribe?id=1">Unsubscribe</a>
+    <a href="https://shop.com/email-preferences">Preferences</a>
+    <a href="https://shop.com/privacy">Privacy policy</a>
+    <a href="https://shop.com/help/contact-us">Help</a>
+    <a href="https://www.facebook.com/shop">Facebook</a>
+    <a href="https://apps.apple.com/app/id1">App Store</a>
+    <a href="mailto:support@shop.com">Mail us</a>
+    <a href="#top">Top</a>
+    <a name="anchor-no-href">x</a>`;
+  assertEquals(extractLinkCandidates(html), [
+    "https://click.email.shop.com/f/a/AbC123?u=https%3A%2F%2Fshop.com%2Fp%2F42",
+    "https://shop.com/products/dog-bed?variant=7&utm_source=email",
+  ]);
+});
+
+Deno.test("extractLinkCandidates: caps count and drops oversized URLs", () => {
+  const many = Array.from({ length: 20 }, (_, i) => `<a href="https://s.com/p/${i}">x</a>`).join("");
+  assertEquals(extractLinkCandidates(many, 15).length, 15);
+  const huge = `<a href="https://s.com/${"a".repeat(1600)}">x</a>`;
+  assertEquals(extractLinkCandidates(huge), []);
 });
 
 Deno.test("truncateForLLM caps length", () => {

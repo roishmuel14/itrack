@@ -89,6 +89,34 @@ export function extractImageCandidates(html: string, limit = 10): string[] {
   return candidates;
 }
 
+// Non-product link shapes: navigation, legal, account, social, app stores.
+// Kept intentionally loose; the LLM does the final "is this THE product" pick.
+const LINK_SKIP_RE =
+  /(unsubscribe|email[-_]?preferences|preference[-_]?cent|privacy|terms|conditions|contact[-_]?us|help|support|faq|login|signin|sign[-_]?in|account|password|apps\.apple\.com|play\.google\.com|facebook\.com|twitter\.com|x\.com|instagram\.com|youtube\.com|tiktok\.com|linkedin\.com|pinterest\.com|whatsapp\.com)/i;
+
+// Product-page link candidates from <a href>, in document order (position in the
+// email correlates with the product block). Redirector/tracker hosts (click.*,
+// awstrack, links.*) are deliberately KEPT: merchants wrap nearly every product
+// link, and productImage.ts resolves redirects with the SSRF guard re-applied.
+export function extractLinkCandidates(html: string, limit = 15): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const aRe = /<a\b[^>]*>/gi;
+  for (const match of html.matchAll(aRe)) {
+    const hrefMatch = match[0].match(/\bhref\s*=\s*["']([^"']+)["']/i);
+    if (!hrefMatch) continue;
+    const href = decodeEntities(hrefMatch[1]).trim();
+    if (!/^https?:\/\//i.test(href)) continue; // drops mailto:, tel:, #, relative
+    if (href.length > 1500) continue;
+    if (LINK_SKIP_RE.test(href)) continue;
+    if (seen.has(href)) continue;
+    seen.add(href);
+    candidates.push(href);
+    if (candidates.length >= limit) break;
+  }
+  return candidates;
+}
+
 export function truncateForLLM(text: string, maxChars = 12000): string {
   if (text.length <= maxChars) return text;
   return text.slice(0, maxChars) + "\n[...truncated]";

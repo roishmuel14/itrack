@@ -12,7 +12,7 @@
 // - Statuses are monotonic; this module is their single writer.
 // - EmailRecord.snippet <= 2000 chars, never the full body.
 
-import { extractImageCandidates, htmlToText, truncateForLLM } from "./htmlToText.ts";
+import { extractImageCandidates, extractLinkCandidates, htmlToText, truncateForLLM } from "./htmlToText.ts";
 import { analyzeEmail, arbitrateSameOrder, type ExtractionResult } from "./extract.ts";
 import {
   computeStatus,
@@ -23,7 +23,7 @@ import {
   type StatusSignal,
 } from "./mergeEngine.ts";
 import { resolveCarrier } from "./carriers.ts";
-import { rehostImage } from "./rehost.ts";
+import { rehostImageMeasured } from "./rehost.ts";
 import { resolveAndRehostLogo } from "./merchantLogo.ts";
 import { domainFromSender } from "./senderDomain.ts";
 import { getMessage } from "./gmail.ts";
@@ -40,6 +40,9 @@ interface OrderItem {
   qty?: number;
   price?: number;
   image_url?: string;
+  image_width?: number;
+  image_source?: string;
+  product_url?: string;
 }
 
 // Fill gaps in an existing item list from a later, richer email. Deliberately
@@ -59,6 +62,12 @@ export function mergeItems(
     const next = { ...e };
     if (!e.image_url && inc.image_url) {
       next.image_url = inc.image_url;
+      next.image_width = inc.image_width;
+      next.image_source = inc.image_source;
+      changed = true;
+    }
+    if (!e.product_url && inc.product_url) {
+      next.product_url = inc.product_url;
       changed = true;
     }
     if (e.price == null && inc.price != null) {
@@ -224,11 +233,13 @@ export async function runCorePipeline(
   try {
     // 3. Classify + extract (one LLM call).
     const imageCandidates = input.html ? extractImageCandidates(input.html) : [];
+    const linkCandidates = input.html ? extractLinkCandidates(input.html) : [];
     const extraction: ExtractionResult = await analyzeEmail(base44, {
       from: input.from,
       subject: input.subject,
       text: truncateForLLM(plainText),
       imageCandidates,
+      linkCandidates,
       today: input.receivedAt.slice(0, 10),
     });
 
@@ -295,20 +306,25 @@ export async function runCorePipeline(
         : { kind: "new_order" };
     }
 
-    // Re-host item images (bounded) before writing items.
-    const items = [];
+    // Re-host item images (bounded) before writing items. product_url is stored
+    // for EVERY item regardless of the rehost cap (it is just a string); the
+    // heavy HQ upgrade via that link happens later in orders/enrichProductImages.
+    const items: OrderItem[] = [];
     let rehostedCount = 0;
     for (const item of extraction.items ?? []) {
-      let imageUrl: string | null = null;
+      let rehosted = null;
       if (item.image_url && rehostedCount < MAX_REHOSTED_IMAGES) {
-        imageUrl = await rehostImage(base44, item.image_url);
-        if (imageUrl) rehostedCount++;
+        rehosted = await rehostImageMeasured(base44, item.image_url);
+        if (rehosted) rehostedCount++;
       }
       items.push({
         name: item.name,
         qty: item.qty ?? 1,
         price: item.price ?? undefined,
-        image_url: imageUrl ?? undefined,
+        image_url: rehosted?.url ?? undefined,
+        image_width: rehosted?.width || undefined,
+        image_source: rehosted ? "email" : undefined,
+        product_url: item.product_url ?? undefined,
       });
     }
 

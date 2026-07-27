@@ -8,7 +8,7 @@ const Checkbox = forwardRef(({ className = '', checked, onCheckedChange, ...prop
     role="checkbox"
     aria-checked={checked}
     onClick={() => onCheckedChange?.(!checked)}
-    className={`h-4 w-4 shrink-0 rounded-sm border border-slate-300 shadow-sm flex items-center justify-center focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-slate-400 disabled:cursor-not-allowed disabled:opacity-50 ${checked ? 'bg-slate-900 text-white border-slate-900' : 'bg-white'} ${className}`}
+    className={`h-4 w-4 shrink-0 rounded border border-input flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 ${checked ? 'bg-primary text-primary-foreground border-primary' : 'bg-card'} ${className}`}
     {...props}
   >
     {checked && <Check className="h-3 w-3" />}
