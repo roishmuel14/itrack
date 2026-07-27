@@ -104,9 +104,14 @@ in FEEDBACK.md.
 - [~] Stage 6: Refund radar + digest - ALL functions + screens deployed; scan verified live
       (AC1 exactly-one, AC2 no-dupes, AC3 dismiss holds, draft cites order number), digest send +
       skip-when-off verified live; remaining: workflows for 03:00/07:00 crons, wipe leak-test rerun
-- [~] Stage 7: Assistant agent - itrack_assistant pushed with user-scoped memory; in-app chat
-      widget deployed; agent answered "Where are my LED strip lights?" correctly from entity tools
-      (headless test). Remaining: WhatsApp enable (Roi, dashboard), two-account isolation gate
+- [x] Stage 7: Assistant agent + WhatsApp - DONE 2026-07-27. All three ACs verified on the live
+      app: AC1 answered in the real chat UI (item question -> right order, status, ETA) plus a
+      reproducible exec smoke; **AC2 isolation gate PASSED** (non-admin account B: unfiltered
+      `read_Order` returned only its own row, user-scoped memory stayed empty), so entity tools
+      were kept and the function-tools-only fallback was never needed; AC3 WhatsApp round trip
+      confirmed on a real phone by Roi. WhatsApp needed no dashboard enable and hit no agent cap
+      (the "Connect" button is an end-user deep link, not an admin toggle), but the in-app
+      affordances are still flag-gated so they can never dead-end. 375px pass done on Roi's phone
 - [ ] Stage 8: Ship (MILESTONE 2: submitted)
 
 ## Architectural decisions (the chosen shape)
@@ -369,13 +374,25 @@ real scheduled run in logs); wipe leaves a second account's data untouched (leak
 
 ## Stage 7: Assistant agent + WhatsApp
 
-- [ ] `base44/agents/itrack_assistant.jsonc` (PRD section 9); `base44 agents push`.
-- [ ] In-app chat button + conversation UI (SDK agents module); WhatsApp connect button via
-      `getWhatsAppConnectURL`.
-- [ ] Roi (manual): check the 3-agent WhatsApp limit across his apps; enable WhatsApp for
-      `itrack_assistant` in the dashboard.
-- [ ] **Isolation gate (PRD F7 AC2 / risk #5):** two-account test through the agent. If entity
-      tools leak, switch to function-tools-only and log to FEEDBACK.md.
+- [x] `base44/agents/itrack_assistant.jsonc` (PRD section 9); `base44 agents push` (2026-07-27:
+      re-pushed, so remote provably equals the committed jsonc; confirmed in the dashboard by the
+      Welcome Message length matching `whatsapp_greeting`. There is no `agents list`/`pull` to read
+      remote state back, so a re-push is the only way to be sure: FEEDBACK).
+- [x] In-app chat button + conversation UI (SDK agents module); WhatsApp connect button via
+      `getWhatsAppConnectURL`, gated behind `WHATSAPP_ENABLED` in `src/lib/config.js` plus a
+      Settings card (PRD section 10 screen 6). The flag exists because `getWhatsAppConnectURL` is a
+      synchronous string builder that returns a URL whether or not the channel works, so the old
+      try/catch around it was dead code and the icon was a live dead link.
+- [x] Roi (manual): WhatsApp for `itrack_assistant`. Outcome 2026-07-27: **there was nothing to
+      enable.** The dashboard's green "Connect" button is not an admin toggle, it opens the same
+      end-user deep link the SDK builds, and no 3-agent cap surfaced anywhere in the UI (FEEDBACK).
+      The channel is live: the deployed Settings button lands on `api.whatsapp.com/send/` with a
+      real number and a prefilled activation code, and the route survives an `agents push`.
+- [x] **Isolation gate (PRD F7 AC2 / risk #5):** `scripts/agent-leak-test.mjs` as non-admin B,
+      exit 0 (2026-07-27). Entity tools did NOT leak, so no fallback to function-tools-only was
+      needed: the agent ran an unfiltered `read_Order` and got exactly its own 1 row while A owned
+      11, and B's memory probe came back empty right after A saved a memory. Seed and cleanup are
+      `scripts/agent-leak-seed.ts` / `agent-leak-cleanup.ts`; `scripts/agent-smoke.ts` covers AC1.
 
 **DoD:** "where's my [item]?" answered correctly in-app for the demo account; second account gets
 only its own data; WhatsApp round-trip on a real phone.

@@ -16,6 +16,15 @@ bugs. On submission day this file becomes the answers to the three required ques
   right, which is exactly how it should be, and it is worth documenting explicitly because right now
   a developer has no way to know it without testing it themselves.
 
+- 2026-07-27: **WhatsApp needed zero backend work and the round trip worked first try.** From an
+  agent that already existed, the entire cost of a second channel was one `whatsapp_greeting` line
+  in the agent jsonc and a link built by `getWhatsAppConnectURL()`. On a real phone: send the
+  prefilled activation message, get the greeting back, ask "where's my Mikasa ball?", and the same
+  tool-backed answer arrives as in the web chat, correctly scoped to that account's own orders. No
+  webhook, no number provisioning, no message-template approval, no session-window handling. Having
+  built a WhatsApp integration the normal way before, this is the single largest effort gap between
+  Base44 and doing it yourself that we hit in this build.
+
 - 2026-07-27: **Nested function-tool names resolve.** `{ "function_name": "orders/manualAdd" }` in
   an agent's `tool_configs` works with the slash intact: the tool call comes back named exactly
   `orders/manualAdd` with `status: "success"`. Our 4xx error contract also survives the trip: a
