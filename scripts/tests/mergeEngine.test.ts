@@ -1,6 +1,7 @@
 // deno test scripts/tests/  (local only; never deployed)
 import { assertEquals } from "jsr:@std/assert";
 import {
+  buildIdentityPatch,
   canTransition,
   computeStatus,
   decideMerge,
@@ -10,6 +11,7 @@ import {
   orderStatusFromShipments,
   type StatusSignal,
 } from "../../base44/shared/mergeEngine.ts";
+import { unionById } from "../../base44/shared/pipeline.ts";
 
 const sig = (rank: number | null, occurredAt: string, extra: Partial<StatusSignal> = {}): StatusSignal => ({
   rank,
@@ -110,4 +112,171 @@ Deno.test("fuzzyCandidates: same merchant within window only", () => {
     { id: "other", merchant_domain: "shein.com", ordered_at: "2026-07-01" },
   ];
   assertEquals(fuzzyCandidates({ merchant_domain: "temu.com", occurredAt: "2026-07-10" }, orders), ["near"]);
+});
+
+Deno.test("fuzzyCandidates: anchor falls back to last_event_at when ordered_at is null (Salomon regression)", () => {
+  // A row born from a number-less delivery notice during a first sync:
+  // created_date is sync day ("now"), but its event happened weeks earlier.
+  const sparse = {
+    id: "sparse",
+    merchant_domain: "salomon.com",
+    ordered_at: null,
+    last_event_at: "2026-05-30",
+    created_date: "2026-07-26",
+  };
+  const hit = fuzzyCandidates({ merchant_domain: "salomon.com", occurredAt: "2026-05-28" }, [sparse]);
+  assertEquals(hit, ["sparse"]);
+  // Without last_event_at the anchor degrades to created_date and misses.
+  const noEvents = { ...sparse, last_event_at: null };
+  assertEquals(fuzzyCandidates({ merchant_domain: "salomon.com", occurredAt: "2026-05-28" }, [noEvents]), []);
+});
+
+Deno.test("fuzzyCandidates: best-first ordering, same-domain before wildcard, then proximity", () => {
+  const orders = [
+    { id: "far-same", merchant_domain: "temu.com", ordered_at: "2026-06-20" },
+    { id: "near-wildcard", merchant_domain: "fedex.com", ordered_at: "2026-07-09" },
+    { id: "near-same", merchant_domain: "temu.com", ordered_at: "2026-07-08" },
+    { id: "no-anchor", merchant_domain: "temu.com" },
+  ];
+  assertEquals(
+    fuzzyCandidates({ merchant_domain: "temu.com", occurredAt: "2026-07-10" }, orders),
+    ["near-same", "far-same", "no-anchor", "near-wildcard"],
+  );
+});
+
+Deno.test("fuzzyCandidates: two explicit differing order numbers never match", () => {
+  const orders = [
+    { id: "different", merchant_domain: "temu.com", order_number: "PO-111", ordered_at: "2026-07-01" },
+    { id: "same-number", merchant_domain: "temu.com", order_number: "#po-222", ordered_at: "2026-07-02" },
+    { id: "no-number", merchant_domain: "temu.com", ordered_at: "2026-07-03" },
+  ];
+  // "same-number" leads despite "no-number" being a day closer: the number match ranks first.
+  assertEquals(
+    fuzzyCandidates({ merchant_domain: "temu.com", order_number: "PO-222", occurredAt: "2026-07-05" }, orders),
+    ["same-number", "no-number"],
+  );
+  // No incoming number: nothing is excluded.
+  assertEquals(
+    fuzzyCandidates({ merchant_domain: "temu.com", occurredAt: "2026-07-05" }, orders).length,
+    3,
+  );
+});
+
+Deno.test("fuzzyCandidates: widen lets domainless/carrier emails search every order", () => {
+  const orders = [
+    { id: "amazon", merchant_domain: "amazon.com", ordered_at: "2026-07-01" },
+    { id: "ksp", merchant_domain: "ksp.co.il", ordered_at: "2026-07-03" },
+  ];
+  // A carrier notice with no usable merchant domain matches nothing today...
+  assertEquals(fuzzyCandidates({ merchant_domain: null, occurredAt: "2026-07-04" }, orders), []);
+  // ...and everything in-window when widened (best-first by proximity).
+  assertEquals(
+    fuzzyCandidates({ merchant_domain: null, occurredAt: "2026-07-04" }, orders, { widen: true }),
+    ["ksp", "amazon"],
+  );
+});
+
+Deno.test("fuzzyCandidates: a matching order number outranks a closer candidate", () => {
+  // decideMerge's number rungs cannot use short numbers (< 5 alphanumerics),
+  // so the number match has to survive the fuzzy RANKING to get arbitrated.
+  const orders = [
+    { id: "closer-no-number", merchant_domain: "lapelota.co.il", ordered_at: "2026-07-04" },
+    { id: "number-match", merchant_domain: "lapelota.co.il", order_number: "3851", ordered_at: "2026-07-01" },
+  ];
+  assertEquals(
+    fuzzyCandidates({ merchant_domain: "lapelota.co.il", order_number: "#3851", occurredAt: "2026-07-05" }, orders),
+    ["number-match", "closer-no-number"],
+  );
+});
+
+Deno.test("fuzzyCandidates: carrier-domain and domainless CANDIDATES are wildcards", () => {
+  const orders = [
+    { id: "fedex-card", merchant_domain: "fedex.com", ordered_at: "2026-07-01" },
+    { id: "domainless", ordered_at: "2026-07-02" },
+    { id: "other-store", merchant_domain: "amazon.com", ordered_at: "2026-07-03" },
+  ];
+  // A merchant email must be able to find a card born from a carrier notice.
+  assertEquals(
+    fuzzyCandidates({ merchant_domain: "salomon.com", occurredAt: "2026-07-04" }, orders),
+    ["domainless", "fedex-card"],
+  );
+});
+
+Deno.test("buildIdentityPatch: an order confirmation repairs a notice-born row", () => {
+  const sparse = { merchant_name: "FedEx", merchant_domain: "fedex.com", order_number: null, ordered_at: null };
+  const patch = buildIdentityPatch(sparse, {
+    merchant_name: "Salomon",
+    merchant_domain: "www.Salomon.com",
+    order_number: "SALPOP-1",
+    classification: "order_confirmation",
+  }, "2026-05-28T00:00:00.000Z");
+  assertEquals(patch, {
+    order_number: "SALPOP-1",
+    merchant_domain: "salomon.com",
+    ordered_at: "2026-05-28T00:00:00.000Z",
+    merchant_name: "Salomon",
+  });
+});
+
+Deno.test("buildIdentityPatch: never downgrades good identity", () => {
+  const good = {
+    merchant_name: "Salomon",
+    merchant_domain: "salomon.com",
+    order_number: "SALPOP-1",
+    ordered_at: "2026-05-01",
+  };
+  // A carrier's shipping notice must not overwrite any of it.
+  assertEquals(
+    buildIdentityPatch(good, {
+      merchant_name: "FedEx",
+      merchant_domain: "fedex.com",
+      order_number: "874775854036",
+      classification: "shipping_update",
+    }, "2026-05-20"),
+    {},
+  );
+  // A second confirmation does not rewrite ordered_at or the name either.
+  assertEquals(
+    buildIdentityPatch(good, {
+      merchant_name: "Salomon Sports",
+      merchant_domain: "salomon.com",
+      order_number: "SALPOP-1",
+      classification: "order_confirmation",
+    }, "2026-05-20"),
+    {},
+  );
+});
+
+Deno.test("buildIdentityPatch: carrier name yields to a real store name without a confirmation", () => {
+  const carrierBorn = { merchant_name: "Israel Post", merchant_domain: null, order_number: null, ordered_at: null };
+  assertEquals(
+    buildIdentityPatch(carrierBorn, {
+      merchant_name: "KSP",
+      merchant_domain: "ksp.co.il",
+      order_number: null,
+      classification: "shipping_update",
+    }, "2026-07-10"),
+    { merchant_domain: "ksp.co.il", merchant_name: "KSP" },
+  );
+  // ...but one carrier name never replaces another.
+  assertEquals(
+    buildIdentityPatch(carrierBorn, {
+      merchant_name: "FedEx",
+      merchant_domain: null,
+      order_number: null,
+      classification: "shipping_update",
+    }, "2026-07-10"),
+    {},
+  );
+});
+
+Deno.test("unionById: run-cache rows win over stale DB rows", () => {
+  const db = [{ id: "a", status: "ordered" }, { id: "b", status: "ordered" }];
+  const cache = [{ id: "a", status: "delivered" }, { id: "c", status: "shipped" }];
+  assertEquals(unionById(db, cache), [
+    { id: "a", status: "delivered" }, // cache wins: it is this run's own write
+    { id: "b", status: "ordered" },
+    { id: "c", status: "shipped" }, // created this run, not yet readable from the DB
+  ]);
+  assertEquals(unionById(db), db);
 });

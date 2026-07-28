@@ -128,26 +128,30 @@ in FEEDBACK.md.
 
 ## OPEN BUGS (must fix before submission)
 
-- [ ] **Duplicate orders shown on the dashboard** (reported by Roi 2026-07-26 during the stage 5
-      live click-through). Reopens the dedup story that stage 3 closed, but the cause is NOT the
-      old one: a live check of A's data on 2026-07-26 found **0 duplicate `(merchant_domain,
-      order_number)` groups across 10 orders**, so the merge engine's key-based dedup is holding
-      and these are not the read-after-write duplicate rows fixed on 07-23. Two candidate causes,
-      in likelihood order:
-      1. **Frontend/realtime double-render (most likely).** The dashboard subscribes to `Order`
-         events; if a `create` event is appended to list state that already contains that id (from
-         the initial fetch or an in-flight `syncMyMail`), the same order renders twice until a
-         refresh. TELL: the duplicate disappears on reload -> it is display-only, no bad data.
-         FIX: de-duplicate by `id` when merging realtime events into state (and check the React
-         `key`), in the dashboard's subscription handler.
-      2. **Order-number-less rows.** 4 of the 10 orders have NO `order_number`, so the
-         `(merchant_domain + order_number)` merge key cannot catch a repeat of the same purchase;
-         two emails about one order can legitimately create two rows. TELL: the duplicate SURVIVES
-         a reload -> it is real data. FIX: extend `decideMerge` fallback for number-less orders
-         (merchant + item/total + date window), then backfill-merge the affected rows.
-      FIRST STEP: reload the dashboard on a visible duplicate and record which of the two it is;
-      that single observation picks the fix. Blocks the demo video and the stage 8 polish pass -
-      duplicate cards are the most visible possible flaw on the main screen judges will see.
+- [x] **Duplicate orders shown on the dashboard** (reported by Roi 2026-07-26, FIXED + cleaned
+      2026-07-28). Root cause was candidate 2 (real data, survives reload), with live-data proof:
+      Gmail lists newest-first, so the number-less delivery/carrier notice of a thread created a
+      sparse Order first, and the richer confirmation seconds later failed every merge rung
+      (Salomon: fuzzy window anchored on the sparse row's `created_date` = sync day, 59d outside
+      the 45d window, arbitration never ran; Amazon + LaPelota: arbitration saw an all-"unknown"
+      candidate summary and the prompt said "when in doubt, answer false"; the FedEx card:
+      carrier email became merchant fedex.com, which can never domain-match the real merchant).
+      FIX (all deployed 2026-07-28): sync pages process oldest-first; fuzzy anchor now
+      `ordered_at ?? last_event_at ?? created_date`, candidates sorted best-first, differing
+      explicit order numbers hard-excluded; carrier/missing domains widen the search on both
+      sides (`isCarrierDomain`); arbitration got full-fidelity summaries (subject + snippet +
+      tracking numbers, full-row RunCache) and a rewritten prompt (missing data is not evidence
+      of difference; same-merchant leans merge, cross-merchant needs positive evidence);
+      matched-branch now repairs `ordered_at`/`merchant_name`/carrier `merchant_domain`;
+      `orders/manualAdd` tracking mode dedupes by tracking number. Existing rows merged by
+      `scripts/dedupe-orders.ts` (10 -> 7 orders, 3 pairs, idempotent re-run = 0). VERIFIED live:
+      dashboard shows 7 unique cards, Overdue 2 -> 0, LaPelota delivered with full product data;
+      manualAdd probes: confirmation + sparse delivery paste merged into ONE order, tracking-mode
+      re-add returned `already_exists`, merchant-less carrier paste attached by tracking. 91 unit
+      tests green (`deno test tests/ scripts/tests/`). NOTE: the two-account agent leak test was
+      NOT rerun (scripts/.env.leaktest with account B credentials is absent on this machine);
+      isolation surfaces untouched (all candidate fetches stay owner-scoped), but rerun it before
+      submission when the env file is restored.
 
 ## Architectural decisions (the chosen shape)
 
