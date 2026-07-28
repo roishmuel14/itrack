@@ -80,7 +80,9 @@ export default function OrderDetail() {
       setState('ready');
     } catch (err) {
       console.error(err);
-      const notFound = err?.message === 'not found' || err?.response?.status === 404;
+      // Covers our local Error('not found'), the SDK's Base44Error
+      // ("Entity Order with ID <id> not found"), and HTTP 404s.
+      const notFound = /not found/i.test(err?.message ?? '') || err?.status === 404 || err?.response?.status === 404;
       if (silent) {
         // Background reload (realtime tick): a transient failure keeps the last
         // good data on screen; only a truly vanished order flips the page state.

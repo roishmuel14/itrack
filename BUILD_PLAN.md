@@ -128,7 +128,16 @@ in FEEDBACK.md.
       confirmed on a real phone by Roi. WhatsApp needed no dashboard enable and hit no agent cap
       (the "Connect" button is an end-user deep link, not an admin toggle), but the in-app
       affordances are still flag-gated so they can never dead-end. 375px pass done on Roi's phone
-- [ ] Stage 8: Ship (MILESTONE 2: submitted)
+- [x] Stage 8: Ship (MILESTONE 2: submitted) - SUBMITTED 2026-07-28 ~midnight IDT (Roi confirmed;
+      the form was still open past 23:20 despite a dormant "Submissions Closed" page in the site
+      nav). Judges self-register (Roi's call): no shared demo account; README "Judge it in 60
+      seconds" + demo/sample-emails/ (probe-verified live: parse -> merge -> one card) replace
+      seeding. Repo PUBLIC after a clean 61-commit secrets audit. Both leak gates re-run POST-
+      submission on the deployed app: reads+realtime (B: 0 foreign, 5/5 own events) and agent
+      isolation (B saw only its canary) - both exit 0. Polish pass + docs merged (PRs #17, #18)
+      and deployed; live click-through done (dashboard, order detail + payment picker, refunds
+      tile==list, settings, not-found route - one regression found live and fixed: SDK not-found
+      message shape). Stale agent "forward to your iTrack address" copy fixed + agents push.
 
 ## OPEN BUGS (must fix before submission)
 
@@ -522,15 +531,22 @@ only its own data; WhatsApp round-trip on a real phone.
       the committed sample emails (demo/sample-emails/, README "Judge it in 60 seconds"); the
       sample pair was probe-verified on the live pipeline (parse -> merge into one order ->
       cleaned up). No shared credentials.
-- [ ] README: architecture diagram, checklist-features table, run instructions, production-path
-      section; finalize FEEDBACK.md (paste-ready answers for the 3 required questions + bugs).
-- [ ] Demo video 2-3 min per PRD section 13 beats; upload (YouTube unlisted).
-- [ ] Secrets audit (`git log -p` scan for tokens; confirm `.app.jsonc` untracked) -> repo public.
-- [ ] Final `npm run build` && `base44 deploy -y`; click through the live URL signed-out and as
-      the demo account.
-- [ ] Submit at backendcompetition.base44.app/submit (form fields per
-      BASE44_BUILDOFF_REFERENCE.md section 3; tick exactly the six features, all genuinely used;
-      NPS = Roi's honest number) + paste feedback.
+- [x] README (2026-07-28): stale "Gmail gated off by platform bug" blockquote replaced with the
+      honest live status; refund section rewritten to v1.6; counts fixed (7 entities, 12
+      functions); "Judge it in 60 seconds" + sample emails added. FEEDBACK.md gained the
+      "Submission paste" section (3 answers + bugs digest + comparisons paragraph).
+- [~] Demo video: form marks it recommended-only; deadline crunch made it Roi's call at submit
+      time. VIDEO_SCRIPT.md refreshed (live Gmail connect beat, v1.6 refund wording, 7 entities)
+      if a video is recorded later for the public repo/README.
+- [x] Secrets audit: full 61-commit `git log -p` pattern scan clean (only a vendored SDK doc
+      example matched); `.app.jsonc`/`.env*` never tracked (verified via `--diff-filter=AD`).
+      Accepted-public: app id, slug URL, connector id (bootstrap returns it to any signed-in
+      user anyway). Repo flipped public by Roi ~23:45.
+- [x] Final build + `base44 deploy -y` (twice: polish deploy + not-found fix); live URL
+      re-checked signed-out (200, landing renders, no console errors) and authenticated as Roi.
+- [x] Submitted at backendcompetition.base44.app/submit - Roi confirmed 2026-07-29 ~00:10 IDT.
+      NEW required field vs the reference doc: a social post on X/LinkedIn tagging @base44
+      (drafts were provided in the SUBMISSION.md kit).
 
 **DoD:** BASE44_BUILDOFF_REFERENCE.md section 12 checklist fully green; submission confirmation
 screen seen.
