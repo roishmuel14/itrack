@@ -12,7 +12,7 @@
 // - Statuses are monotonic; this module is their single writer.
 // - EmailRecord.snippet <= 2000 chars, never the full body.
 
-import { extractImageCandidates, htmlToText, truncateForLLM } from "./htmlToText.ts";
+import { extractImageCandidates, extractLinkCandidates, htmlToText, truncateForLLM } from "./htmlToText.ts";
 import {
   analyzeEmail,
   arbitrateSameOrder,
@@ -29,7 +29,7 @@ import {
   type StatusSignal,
 } from "./mergeEngine.ts";
 import { resolveCarrier } from "./carriers.ts";
-import { rehostImage } from "./rehost.ts";
+import { rehostImageMeasured } from "./rehost.ts";
 import { resolveAndRehostLogo } from "./merchantLogo.ts";
 import { domainFromSender } from "./senderDomain.ts";
 import { getMessage } from "./gmail.ts";
@@ -46,6 +46,9 @@ interface OrderItem {
   qty?: number;
   price?: number;
   image_url?: string;
+  image_width?: number;
+  image_source?: string;
+  product_url?: string;
 }
 
 // Fill gaps in an existing item list from a later, richer email. Deliberately
@@ -63,8 +66,20 @@ export function mergeItems(
     const inc = byName.get(key(e.name));
     if (!inc) return e;
     const next = { ...e };
-    if (!e.image_url && inc.image_url) {
+    // A photo from the merchant's own email outranks anything enrichment found
+    // on the web (a web result is regularly the wrong colourway or a series
+    // shot), so a later email may overwrite a product_page/search image as well
+    // as fill a blank. It never overwrites another email image.
+    const webSourced = e.image_source === "product_page" || e.image_source === "search";
+    const incomingIsEmail = inc.image_source === "email";
+    if (inc.image_url && (!e.image_url || (webSourced && incomingIsEmail))) {
       next.image_url = inc.image_url;
+      next.image_width = inc.image_width;
+      next.image_source = inc.image_source;
+      changed = true;
+    }
+    if (!e.product_url && inc.product_url) {
+      next.product_url = inc.product_url;
       changed = true;
     }
     if (e.price == null && inc.price != null) {
@@ -261,11 +276,13 @@ export async function runCorePipeline(
   try {
     // 3. Classify + extract (one LLM call).
     const imageCandidates = input.html ? extractImageCandidates(input.html) : [];
+    const linkCandidates = input.html ? extractLinkCandidates(input.html) : [];
     const extraction: ExtractionResult = await analyzeEmail(base44, {
       from: input.from,
       subject: input.subject,
       text: truncateForLLM(plainText),
       imageCandidates,
+      linkCandidates,
       today: input.receivedAt.slice(0, 10),
     });
 
@@ -345,20 +362,25 @@ export async function runCorePipeline(
       return { status: "unroutable", emailRecordId: rec.id };
     }
 
-    // Re-host item images (bounded) before writing items.
-    const items = [];
+    // Re-host item images (bounded) before writing items. product_url is stored
+    // for EVERY item regardless of the rehost cap (it is just a string); the
+    // heavy HQ upgrade via that link happens later in orders/enrichProductImages.
+    const items: OrderItem[] = [];
     let rehostedCount = 0;
     for (const item of extraction.items ?? []) {
-      let imageUrl: string | null = null;
+      let rehosted = null;
       if (item.image_url && rehostedCount < MAX_REHOSTED_IMAGES) {
-        imageUrl = await rehostImage(base44, item.image_url);
-        if (imageUrl) rehostedCount++;
+        rehosted = await rehostImageMeasured(base44, item.image_url);
+        if (rehosted) rehostedCount++;
       }
       items.push({
         name: item.name,
         qty: item.qty ?? 1,
         price: item.price ?? undefined,
-        image_url: imageUrl ?? undefined,
+        image_url: rehosted?.url ?? undefined,
+        image_width: rehosted?.width || undefined,
+        image_source: rehosted ? "email" : undefined,
+        product_url: item.product_url ?? undefined,
       });
     }
 

@@ -97,13 +97,25 @@ in FEEDBACK.md.
 - [x] Stage 4: Frontend shell + shared kit - deployed 2026-07-22 (tokens, auth+OTP+Google, api
       wrappers with reasons-toasts, formatters, empty dashboard; login verified signed-out at
       375px, error toast verified via DOM)
-- [~] Stage 5: Dashboard + timeline + onboarding - ALL UI deployed (stats, filters, cards with
-      progress+today marker, realtime subscriptions, detail+timeline+snippets, onboarding with
-      confirmForwarding assist, manual add, activity feed); remaining: authenticated click-through
-      + two-window realtime test (needs a browser session), narrow-viewport pass on inner screens
-- [~] Stage 6: Refund radar + digest - ALL functions + screens deployed; scan verified live
+- [x] Stage 5: Dashboard + timeline + onboarding - COMPLETE 2026-07-26 (MILESTONE 1: daily usable).
+      All UI deployed (stats, filters, cards with progress+today marker, realtime subscriptions,
+      detail+timeline+snippets, onboarding with Connect Gmail + paste-an-email, manual add, activity
+      feed). Roi verified the remaining live items in a browser session on the deployed app
+      (2026-07-26): authenticated click-through, two-window realtime, narrow-viewport inner screens.
+- [x] Stage 6: Refund radar + digest - ALL functions + screens deployed; scan verified live
       (AC1 exactly-one, AC2 no-dupes, AC3 dismiss holds, draft cites order number), digest send +
-      skip-when-off verified live; remaining: workflows for 03:00/07:00 crons, wipe leak-test rerun
+      skip-when-off verified live. **Scheduled crons CONFIRMED in `base44 logs` 2026-07-26: two
+      real runs each, on consecutive days.** `refunds/scan` fired 07-25 03:03:37 and 07-26 03:04:56
+      UTC (cron `0 3 * * *`), both `{ok:true, overdue_orders:10, created:0, skippedExisting:16}` -
+      a real scheduled run proving F5 AC2 (re-scan creates no duplicates). `digest/send` fired
+      07-25 07:02:16 (`sent:0, skipped:3, considered:3`) and 07-26 07:04:30 (`sent:1, skipped:2,
+      considered:3`) UTC (cron `0 7 * * *`) - covers F10 AC2/AC3 (sends only when there is content,
+      skips opted-out/empty users). COMPLETE 2026-07-26 (Roi's call). Recorded for honesty: the
+      post-wipe leak-test RERUN was not executed (it deletes data). Wipe isolation rests on static
+      verification instead - `account/wipe` deletes only via
+      `deleteMany({ owner_email: user.email })`, with the email taken from the token server-side
+      (never the request body) and gated behind `confirm: true`, so other users' rows are
+      structurally unreachable; RLS isolation itself is proven live in stages 1 and 2.
 - [x] Stage 7: Assistant agent + WhatsApp - DONE 2026-07-27. All three ACs verified on the live
       app: AC1 answered in the real chat UI (item question -> right order, status, ETA) plus a
       reproducible exec smoke; **AC2 isolation gate PASSED** (non-admin account B: unfiltered
@@ -113,6 +125,29 @@ in FEEDBACK.md.
       (the "Connect" button is an end-user deep link, not an admin toggle), but the in-app
       affordances are still flag-gated so they can never dead-end. 375px pass done on Roi's phone
 - [ ] Stage 8: Ship (MILESTONE 2: submitted)
+
+## OPEN BUGS (must fix before submission)
+
+- [ ] **Duplicate orders shown on the dashboard** (reported by Roi 2026-07-26 during the stage 5
+      live click-through). Reopens the dedup story that stage 3 closed, but the cause is NOT the
+      old one: a live check of A's data on 2026-07-26 found **0 duplicate `(merchant_domain,
+      order_number)` groups across 10 orders**, so the merge engine's key-based dedup is holding
+      and these are not the read-after-write duplicate rows fixed on 07-23. Two candidate causes,
+      in likelihood order:
+      1. **Frontend/realtime double-render (most likely).** The dashboard subscribes to `Order`
+         events; if a `create` event is appended to list state that already contains that id (from
+         the initial fetch or an in-flight `syncMyMail`), the same order renders twice until a
+         refresh. TELL: the duplicate disappears on reload -> it is display-only, no bad data.
+         FIX: de-duplicate by `id` when merging realtime events into state (and check the React
+         `key`), in the dashboard's subscription handler.
+      2. **Order-number-less rows.** 4 of the 10 orders have NO `order_number`, so the
+         `(merchant_domain + order_number)` merge key cannot catch a repeat of the same purchase;
+         two emails about one order can legitimately create two rows. TELL: the duplicate SURVIVES
+         a reload -> it is real data. FIX: extend `decideMerge` fallback for number-less orders
+         (merchant + item/total + date window), then backfill-merge the affected rows.
+      FIRST STEP: reload the dashboard on a visible duplicate and record which of the two it is;
+      that single observation picks the fix. Blocks the demo video and the stage 8 polish pass -
+      duplicate cards are the most visible possible flaw on the main screen judges will see.
 
 ## Architectural decisions (the chosen shape)
 
@@ -337,38 +372,50 @@ invoke error path shows a toast with the server's reason message (force one).
 
 ## Stage 5: Dashboard + timeline + onboarding (MILESTONE 1: daily usable)
 
-- [ ] Dashboard: stats row, filter tabs, card grid (image, logo, status chip, progress bar with
+- [x] Dashboard: stats row, filter tabs, card grid (image, logo, status chip, progress bar with
       today marker, countdown, refund badge), delivered section collapsed, ETA sort.
-- [ ] Realtime: subscribe to Order + TrackingEvent; live card updates + toasts.
-- [ ] Order detail: header, shipment blocks (copy tracking number, carrier deep link), timeline
+- [x] Realtime: subscribe to Order + TrackingEvent; live card updates + toasts.
+- [x] Order detail: header, shipment blocks (copy tracking number, carrier deep link), timeline
       with source snippets, archive / mark-delivered via `orders/setStatus`.
-- [ ] Onboarding screen: "Connect Gmail" (read-only, one click) + paste-an-email as the equal
+- [x] Onboarding screen: "Connect Gmail" (read-only, one click) + paste-an-email as the equal
       second path. The Gmail-filter walkthrough and `inbox/confirmForwarding` assist are RETIRED
       (no forwarding in the per-user model); the function is deleted.
-- [ ] `orders/manualAdd` (paste email text OR tracking number) + UI.
-- [ ] Activity feed (latest events, newest first).
+- [x] `orders/manualAdd` (paste email text OR tracking number) + UI.
+- [x] Activity feed (latest events, newest first).
 
 **DoD:** PRD F3 AC 1-3, F4 AC 1-3, F6 AC 1-2 (two-window realtime + two-account RLS-over-realtime),
 F8 AC 1-2, F9 AC 1-3; narrow-viewport pass on every screen; **connect Gmail -> real order cards
 appear** (the demo moment, replacing "forward-an-email" with the pivot; the connect + first-sync
 half is already verified live in stage 2, so what remains here is the authenticated click-through,
 the two-window realtime test, and the 375px pass on inner screens).
+**MET 2026-07-26** - the connect -> real-cards demo moment and RLS-over-realtime were verified in
+stages 2 and 1 respectively; Roi verified the remaining three live items (authenticated
+click-through, two-window realtime, 375px inner screens) in a browser session on the deployed app.
 
 ---
 
 ## Stage 6: Refund radar + digest
 
-- [ ] `refunds/scan`: overdue detection, policy matching, upsert (unique order+policy, skip
+- [x] `refunds/scan`: overdue detection, policy matching, upsert (unique order+policy, skip
       dismissed), claim drafting; cron `0 3 * * *`; manual trigger path for testing.
-- [ ] `refunds/updateStatus` (dismiss/claimed/recovered) + Refunds screen (countdowns, copy claim,
+- [x] `refunds/updateStatus` (dismiss/claimed/recovered) + Refunds screen (countdowns, copy claim,
       claim link) + card badges + stats-row sum.
-- [ ] `digest/send`: per-user opt-in digest, `Core.SendEmail`, cron `0 7 * * *`; `settings/update`
+- [x] `digest/send`: per-user opt-in digest, `Core.SendEmail`, cron `0 7 * * *`; `settings/update`
       function; Settings screen (digest toggle + hour, address, wipe with confirm).
-- [ ] `account/wipe` full implementation (all per-user entities).
-- [ ] Test fixture: `scripts/force-overdue.ts` backdates a demo order's promised_date.
+- [x] `account/wipe` full implementation (all per-user entities).
+- [x] Test fixture: `scripts/force-overdue.ts` backdates a demo order's promised_date.
+- [~] Wipe leak-test rerun: NOT RUN (it deletes data); waived 2026-07-26 by Roi's call. Covered
+      instead by static verification of `account/wipe` (deletes scoped to
+      `deleteMany({ owner_email: user.email })`, email from the token, `confirm: true` required).
+      To close it properly later: invoke `account/wipe` as account B, then assert account A's rows
+      are untouched (A held 10 real imported orders as of 2026-07-26; the earlier "36" predates the
+      product_kind relevance filtering that excluded SaaS/food-delivery/flight receipts).
 
 **DoD:** PRD F5 AC 1-4 and F10 AC 1-3 pass on deployed app (cron verified by manual trigger + one
 real scheduled run in logs); wipe leaves a second account's data untouched (leak-test rerun).
+**Cron half MET 2026-07-26** (`base44 logs --env preview`, two consecutive real scheduled runs each:
+`refunds/scan` 07-25 03:03:37 + 07-26 03:04:56 UTC, `created:0 skippedExisting:16`; `digest/send`
+07-25 07:02:16 `sent:0` + 07-26 07:04:30 `sent:1 skipped:2` UTC). Wipe rerun still open.
 
 ---
 

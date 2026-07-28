@@ -57,6 +57,15 @@ bugs. On submission day this file becomes the answers to the three required ques
   account A's, which were churned in the same rooms during the same window. The server filters the
   broadcast by row ownership before delivery - exactly what we needed and could not safely assume.
   PRD risk #2 (subscribe leaking across users) closed; no polling fallback required.
+- 2026-07-27: **`InvokeLLM` with `add_context_from_internet: true` composes cleanly with
+  `response_json_schema`.** Used for three different web lookups (merchant official-domain guess,
+  brand-logo discovery, product search) and the structured output held every time. One behavioral
+  note worth documenting: with internet context the model reliably identifies PAGES (a Wikipedia
+  article, a product page, a CDN host) but frequently invents the deep asset path (Wikimedia thumb
+  URLs carry an MD5 hash prefix it cannot know; retailer CDN paths came back plausible but 404).
+  The winning pattern was "LLM names the page, deterministic code resolves the asset": Wikipedia
+  images list + imageinfo API for logos, og:image/JSON-LD extraction for product pages. Worth a
+  docs example, since naive "return an image URL" prompts look like they work and then 404.
 
 ## Where we got stuck / confused
 
@@ -150,6 +159,17 @@ bugs. On submission day this file becomes the answers to the three required ques
   for a nonexistent address, so it can be used to enumerate which emails have accounts. Suggestion:
   make resend-otp respond 200 unconditionally, like the reset request does.
 
+- 2026-07-26 (CLI 0.1.5): **`base44 logs --env prod` reports nothing for a CLI-deployed app that is
+  live and serving real users, and the wording implies the app was never shipped.** Our app is
+  deployed with `base44 deploy`, serves real traffic on its `*.base44.app` URL, and runs scheduled
+  workflows daily - yet `--env prod` answers `No production logs found. Has this app been published?`
+  while every real run (user function calls AND scheduled workflow runs) appears under
+  `--env preview`. So for a CLI-first app, "preview" IS production, and the flag that sounds like
+  the live environment is the empty one. That is a genuinely alarming message to read mid-verification
+  (we briefly thought the deployment was gone). Suggestions: (a) note in `--help` and the docs that
+  CLI-deployed apps log under `preview` because `prod` refers to the builder's Publish flow, or
+  (b) make the empty-prod message say so explicitly instead of asking whether the app was published.
+
 - 2026-07-23 (SDK 0.8.3, Node headless): **The realtime `subscribe()` socket connects ANONYMOUSLY
   and silently in Node - zero events, no error - when the token is not passed to `createClient`.**
   `client.js` sets `socketConfig.token` from `createClient(config).token`, and the only fallback is
@@ -188,6 +208,10 @@ bugs. On submission day this file becomes the answers to the three required ques
 
 ## Bugs (with repro)
 
+- 2026-07-27 (CLI 0.1.5): **`base44 logs` (no args, 11 functions) times out** with
+  `Request timed out: GET .../functions-mgmt/orders%2FenrichProductImages/logs` when it walks all
+  functions; `base44 logs --function <name>` for the same function succeeds instantly. Looks like
+  the all-functions fan-out shares one short timeout. Workaround: always pass `--function`.
 - 2026-07-23 (BLOCKER for BYO app-user Gmail OAuth on a default `<slug>.base44.app` app):
   **The app-user connector OAuth flow redirects to the APEX `https://base44.app/api/external-auth/callback`,
   which Google refuses to register because `base44.app` is on the Public Suffix List** (like

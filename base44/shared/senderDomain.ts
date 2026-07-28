@@ -86,6 +86,20 @@ export function registrableDomain(host: string): string {
   return MULTI_PART_SUFFIXES.has(lastTwo) ? parts.slice(-3).join(".") : lastTwo;
 }
 
+// True for domains that can never be a merchant's own site: mail vendors,
+// consumer mailbox providers, and BARE hosted-store platforms (a platform
+// subdomain like acme.myshopify.com is a real merchant and passes). Used to
+// validate LLM-guessed merchant domains before the logo ladder runs on them.
+// Carriers are deliberately ALLOWED: when the merchant on the card IS FedEx
+// (an order created from a carrier email), fedex.com is exactly the right logo.
+export function isNonMerchantDomain(domain: string): boolean {
+  const host = domain.toLowerCase().trim();
+  if (!host) return true;
+  const reg = registrableDomain(host);
+  if (PLATFORM_SUFFIXES.has(reg)) return host === reg;
+  return ESP_BLOCKLIST.has(reg) || MAILBOX_PROVIDERS.has(reg);
+}
+
 // Returns { domain: null } whenever the sender cannot be trusted to represent the
 // merchant. The reason is for tests and logs, never for the UI.
 export function domainFromSender(
