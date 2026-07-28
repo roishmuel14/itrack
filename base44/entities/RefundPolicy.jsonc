@@ -1,5 +1,8 @@
 // Global reference data: merchant/payment refund policies matched by refunds/scan.
 // Readable by everyone; writes admin/service only. Seeded by scripts/seed-policies.ts.
+// No generic catch-all any more (PRD amendment v1.6): a policy applies ONLY via
+// merchant_domain match (policyDomainMatches) or payment_rail match against
+// Order.payment_method. An empty merchant_domain with no payment_rail matches nothing.
 {
   "name": "RefundPolicy",
   "type": "object",
@@ -7,14 +10,37 @@
   "description": "A merchant or payment-rail refund policy rule",
   "properties": {
     "policy_key":      { "type": "string", "description": "Unique key, e.g. temu_on_time" },
-    "merchant_domain": { "type": "string", "description": "Empty = generic policy (applies to any merchant)" },
+    "merchant_domain": { "type": "string", "description": "Merchant policies match this domain (via policyDomainMatches); empty for payment-rail policies" },
     "rule_type": {
       "type": "string",
       "enum": ["late_delivery", "buyer_protection", "chargeback_window"]
     },
     "description":     { "type": "string", "description": "Shown in UI" },
-    "window_days":     { "type": "integer", "description": "Claim window after promised/order date" },
-    "claim_url":       { "type": "string", "description": "Where to file" }
+    "window_days":     { "type": "integer", "description": "Claim window from deadline_from" },
+    "claim_url":       { "type": "string", "description": "Where to file" },
+    "payment_rail": {
+      "type": "string",
+      "enum": ["paypal", "credit_card", "debit_card", "bit", "apple_pay", "google_pay",
+               "bank_transfer", "cash_on_delivery", "gift_card", "other"],
+      "description": "Empty = merchant policy. Non-empty means this policy only applies when Order.payment_method matches (evidence-gated)"
+    },
+    "remedy": {
+      "type": "string",
+      "enum": ["order_total", "shipping_fee", "store_credit", "unknown"],
+      "description": "What amount_estimate means when this policy is the basis; store_credit/unknown carry no number"
+    },
+    "min_days_late":   { "type": "integer", "description": "Lateness before this policy is worth acting on" },
+    "applies_when_delivered": {
+      "type": "boolean",
+      "default": false,
+      "description": "true for on-time-guarantee credits, which pay out precisely when a parcel ARRIVES late"
+    },
+    "deadline_from": {
+      "type": "string",
+      "enum": ["promised_date", "ordered_at"],
+      "default": "promised_date",
+      "description": "Payment-rail windows run from the transaction date, not the delivery date"
+    }
   },
   "required": ["policy_key"],
   "rls": {

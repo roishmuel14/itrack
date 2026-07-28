@@ -1,6 +1,8 @@
-// refunds/updateStatus (PRD F5): dismiss / claimed / recovered transitions,
-// owner-checked. Dismissed opportunities never resurface (scan skips any
-// existing order+policy row regardless of status).
+// refunds/updateStatus (PRD F5, amendment v1.6): dismiss / claimed /
+// recovered / restore transitions, owner-checked. Dismissed cases never
+// resurface from a rescan (scan skips any existing row that is dismissed
+// regardless of stage), but the user can explicitly Restore one back to
+// detected so a scan pass can re-evaluate it on the next run.
 
 import { createClientFromRequest } from "npm:@base44/sdk";
 import { fail, getUserOrNull, ok, serverError, unauthorized } from "../../../shared/responses.ts";
@@ -9,7 +11,7 @@ const ALLOWED: Record<string, string[]> = {
   detected: ["dismissed", "claimed", "recovered"],
   notified: ["dismissed", "claimed", "recovered"],
   claimed: ["recovered", "dismissed"],
-  dismissed: [],
+  dismissed: ["detected"],
   recovered: [],
 };
 
@@ -27,7 +29,7 @@ Deno.serve(async (req) => {
     }
     const id = typeof body.opportunity_id === "string" ? body.opportunity_id : "";
     const next = typeof body.status === "string" ? body.status : "";
-    if (!id || !["dismissed", "claimed", "recovered"].includes(next)) {
+    if (!id || !["detected", "dismissed", "claimed", "recovered"].includes(next)) {
       return fail(422, "Cannot update refund", [
         { code: "bad_input", message: "opportunity_id and a valid status are required" },
       ]);

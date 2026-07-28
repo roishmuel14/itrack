@@ -116,6 +116,10 @@ in FEEDBACK.md.
       `deleteMany({ owner_email: user.email })`, with the email taken from the token server-side
       (never the request body) and gated behind `confirm: true`, so other users' rows are
       structurally unreachable; RLS isolation itself is proven live in stages 1 and 2.
+      **SUPERSEDED 2026-07-28 for the refund model specifically** (AC1/AC2/AC3 re-verified under
+      the new one-case-per-order model, see the "Refund radar producing false claims" OPEN BUGS
+      entry above and PRD amendment v1.6); the cron schedule and digest mechanics above are
+      unaffected.
 - [x] Stage 7: Assistant agent + WhatsApp - DONE 2026-07-27. All three ACs verified on the live
       app: AC1 answered in the real chat UI (item question -> right order, status, ETA) plus a
       reproducible exec smoke; **AC2 isolation gate PASSED** (non-admin account B: unfiltered
@@ -152,6 +156,61 @@ in FEEDBACK.md.
       NOT rerun (scripts/.env.leaktest with account B credentials is absent on this machine);
       isolation surfaces untouched (all candidate fetches stay owner-scoped), but rerun it before
       submission when the env file is restored.
+- [x] **Refund radar producing false claims** (reported by Roi 2026-07-28, FIXED same day; see PRD
+      amendment v1.6). Live proof: one LaPelota order (₪211.65, 6 days late, still in transit)
+      generated TWO cards, "PayPal buyer protection" and "Credit card chargeback," both claiming
+      ₪211.65, though the order was never paid via PayPal - traced to `refunds/scan`'s generic
+      catch-all (`matched = genericPolicies` when no merchant policy hit, firing both payment-rail
+      policies at once) and `amount_estimate = order.total` regardless of what a policy actually
+      pays. Same happened to a KSP order. FIX (all deployed 2026-07-28): `RefundOpportunity` is now
+      one CASE per late order (unique `owner_email + order_id`), holding a ranked `routes[]` gated
+      on real evidence (merchant-domain match via the new `policyDomainMatches`, or a payment-rail
+      match against a new `Order.payment_method` - no evidence, no route, just a locked
+      "add how you paid" placeholder); staged by lateness (`late` -> `likely_lost` -> `dispute`, or
+      `delivered_late`); amounts honest (`RefundPolicy.remedy` records what a policy actually pays,
+      only `order_total` ever carries a number); claim drafts stage-aware and addressed to the
+      right party (never a chargeback threat at `late`, never asks for a refund on an order that
+      already arrived). `scripts/purge-bogus-refunds.ts` deleted all 5 existing rows (2x
+      `paypal_180`, 2x `cc_chargeback`, 1x `amazon_guaranteed`, all still `detected` so no real
+      history lost) and a rescan rebuilt cleanly: 0 cases for LaPelota/KSP (both delivered, no known
+      merchant remedy, no payment evidence - honest absence beats a fabricated claim), 1 honest case
+      for a real Amazon shipping-fee guarantee. VERIFIED live via `base44 exec`: idempotency (3
+      scans, 0 duplicates), dismiss-holds-through-rescan + Restore round trip, full staged
+      escalation on a disposable order (late/no-evidence -> credit_card evidenced-but-not-late-
+      enough -> 35-days dispute with the real order total and a draft addressed to "your payment
+      provider"), and the extraction prompt (explicit "Paid with PayPal" captured, a decoy renewal
+      date did not leak into `promised_date`, Amazon's payment method stayed null - never inferred
+      from the merchant). Frontend redesign (`Refunds.jsx` grouping, `RefundCase`/`RouteRow`/
+      `PaymentMethodPicker` components, honest Dashboard tile) deployed but NOT click-through
+      verified in a live authenticated session (no credential-entry path was available this
+      session); Roi should spot-check the Refunds page, Dashboard tile, and OrderDetail payment
+      picker before submission.
+      **REVIEW FOLLOW-UP 2026-07-28 (PR #15 review, 3 defects found and fixed):** (1) the scan only
+      ever created/updated and never RECONCILED, so a case whose order later arrived (or whose
+      `promised_date` was revised forward, or that was archived/cancelled) was left open still
+      asserting "N days late, still not delivered" - every disqualifying path was a bare `continue`
+      before the existing-row lookup. Now `qualify()` returns null and the caller RETIRES the row,
+      plus an end-of-run sweep catches cases whose order left the candidate set entirely; only
+      user-untouched rows (`detected`/`notified`) are ever retired, so dismissed/claimed/recovered
+      stay as the user's record, and the sweep is skipped with a loud log if either read hit its
+      cap (deleting on a truncated read would destroy live cases). (2) `days_late` for delivered
+      orders came from `Order.last_event_at`, the last event of ANY type, so a later seller message
+      (or a manual add's ingest timestamp) overstated the lateness - a probe promised 19/07 and
+      delivered 24/07 reported 9 days instead of 5. Now read from the `delivered` TrackingEvent
+      (earliest wins) and the real date is carried on the row as `delivered_at` so the UI never
+      falls back to `last_event_at`. (3) draft regeneration keyed only on `stage`, so adding a
+      payment method at an unchanged stage flipped `draft_recipient` to `payment_provider` while
+      leaving merchant-addressed text under it; the key now includes the recipient (and retries a
+      missing draft). ALL THREE VERIFIED live: retire-on-delivery and sweep-on-archive both report
+      `retired:1` and leave 0 rows; the delivered probe reports `days_late:5` with
+      `delivered_at:2026-07-24`; the recipient flip regenerates the draft from "I am contacting
+      ProbeShopC support..." to "I am filing a formal dispute regarding a charge of 300 ILS...".
+      Idempotency re-confirmed (two consecutive scans: created/updated/retired all 0). 101 tests
+      green. **Also caught during review: the live app had SILENTLY REVERTED `refunds/scan` to the
+      pre-fix code** (a fresh call returned the old `{overdue_orders, skippedExisting}` shape and
+      created 2 bogus rows for one order); timing points at the `git push` triggering a Base44 sync
+      from `main`, which lacks these changes until the PR merges. Redeployed and re-verified. Treat
+      "re-check the live response shape after merging" as a release-checklist item.
 
 ## Architectural decisions (the chosen shape)
 

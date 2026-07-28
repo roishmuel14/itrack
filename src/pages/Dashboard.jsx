@@ -15,7 +15,8 @@ import ConfirmDialog from '@/components/ConfirmDialog';
 import DeliveredDialog from '@/components/DeliveredDialog';
 import OrderCard from '@/components/OrderCard';
 import ActivityFeed from '@/components/ActivityFeed';
-import { daysUntil, formatDate, formatMoney } from '@/lib/format';
+import StatCell, { STAT_DIVIDERS } from '@/components/StatCell';
+import { daysUntil, formatDate, formatMoney, isOpenRefundCase } from '@/lib/format';
 
 const ACTIVE_STATUSES = ['ordered', 'shipped', 'in_transit', 'out_for_delivery', 'delayed'];
 const FILTERS = [
@@ -32,28 +33,6 @@ function isOverdue(o) {
 function isArrivingSoon(o) {
   const d = daysUntil(o.eta_date || o.promised_date);
   return ACTIVE_STATUSES.includes(o.status) && d != null && d >= 0 && d <= 3;
-}
-
-// The stats read as ONE manifest strip: a single card cut into label fields by
-// dashed rules, the way a shipping label separates its data blocks. Divider
-// classes are static per cell (2x2 on mobile, 1x4 on desktop) so Tailwind can
-// see them.
-const STAT_DIVIDERS = [
-  'border-e border-b lg:border-b-0 border-dashed',
-  'border-b lg:border-b-0 lg:border-e border-dashed',
-  'border-e border-dashed',
-  '',
-];
-
-function StatCell({ label, value, tone, dividers }) {
-  return (
-    <div className={`px-4 py-3.5 ${dividers}`}>
-      <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{label}</p>
-      <p className={`font-display font-extrabold text-[26px] leading-none tracking-tight tabular-nums mt-1.5 ${tone ?? ''}`}>
-        {value}
-      </p>
-    </div>
-  );
 }
 
 // After a sync lands new orders, quietly repair their logos and pull HQ product
@@ -86,7 +65,7 @@ export default function Dashboard() {
       const [o, e, r] = await Promise.all([
         Order.list('-last_event_at', 500),
         TrackingEvent.list('-occurred_at', 30),
-        RefundOpportunity.filter({ status: 'detected' }, '-created_date', 100).catch(() => []),
+        RefundOpportunity.list('-created_date', 200).catch(() => []),
       ]);
       setOrders(o.filter((x) => !x.is_archived));
       setEvents(e);
@@ -181,9 +160,13 @@ export default function Dashboard() {
     });
   }, [gmail.connected, sync, toast, load]);
 
-  const refundsByOrder = useMemo(() => {
+  // At most one RefundOpportunity per order (PRD amendment v1.6), so this is
+  // a lookup, not a count.
+  const refundByOrder = useMemo(() => {
     const m = {};
-    for (const r of refunds) m[r.order_id] = (m[r.order_id] ?? 0) + 1;
+    for (const r of refunds) {
+      if (isOpenRefundCase(r)) m[r.order_id] = r;
+    }
     return m;
   }, [refunds]);
 
@@ -302,7 +285,17 @@ export default function Dashboard() {
   const delivered = orders.filter((o) => o.status === 'delivered');
   const overdueList = active.filter(isOverdue);
   const soonList = active.filter(isArrivingSoon);
-  const refundSum = refunds.reduce((sum, r) => sum + (r.amount_estimate ?? 0), 0);
+
+  // Honest tile (PRD amendment v1.6): the headline is always a count, so it
+  // can never be wrong. Money appears only as subtext, and only when every
+  // open case's amount is real and in the same currency. isOpenRefundCase is
+  // shared with the Refunds page so this count always matches that list.
+  const openRefunds = refunds.filter(isOpenRefundCase);
+  const withAmount = openRefunds.filter((r) => r.amount_estimate != null);
+  const refundCurrencies = new Set(withAmount.map((r) => r.currency || 'USD'));
+  const refundPotential = withAmount.length && refundCurrencies.size === 1
+    ? `up to ${formatMoney(withAmount.reduce((sum, r) => sum + r.amount_estimate, 0), [...refundCurrencies][0])}`
+    : null;
 
   const etaSorted = (list) =>
     [...list].sort((a, b) => {
@@ -349,9 +342,10 @@ export default function Dashboard() {
           dividers={STAT_DIVIDERS[2]}
         />
         <StatCell
-          label="Refunds found"
-          value={refundSum > 0 ? formatMoney(refundSum, 'USD') : refunds.length || 0}
-          tone={refunds.length ? 'text-[hsl(var(--status-soon))]' : ''}
+          label="Refund claims"
+          value={openRefunds.length}
+          sub={refundPotential}
+          tone={openRefunds.length ? 'text-[hsl(var(--status-soon))]' : ''}
           dividers={STAT_DIVIDERS[3]}
         />
       </div>
@@ -425,7 +419,7 @@ export default function Dashboard() {
                 <OrderCard
                   key={o.id}
                   order={o}
-                  refundCount={refundsByOrder[o.id] ?? 0}
+                  refund={refundByOrder[o.id]}
                   onMarkDelivered={setDeliveringOrder}
                   onDelete={setDeletingOrder}
                   busy={completingId === o.id}

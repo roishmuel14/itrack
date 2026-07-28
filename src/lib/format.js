@@ -98,6 +98,36 @@ export function statusChip(status) {
   return { label: meta.label, className: TONE_CLASSES[meta.tone], textClassName: TONE_TEXT_CLASSES[meta.tone] };
 }
 
+// RefundOpportunity.stage metadata (PRD amendment v1.6): staged escalation,
+// so the chip tone tracks how urgent the case is, not just that one exists.
+export const REFUND_STAGE_META = {
+  late: { label: 'Late', tone: 'soon' },
+  likely_lost: { label: 'Likely lost', tone: 'overdue' },
+  dispute: { label: 'Dispute', tone: 'overdue' },
+  delivered_late: { label: 'Arrived late', tone: 'transit' },
+};
+
+export function refundStageChip(stage) {
+  const meta = REFUND_STAGE_META[stage] ?? { label: stage, tone: 'neutral' };
+  return { label: meta.label, className: TONE_CLASSES[meta.tone], textClassName: TONE_TEXT_CLASSES[meta.tone] };
+}
+
+// ONE definition of "open refund case", shared by the Dashboard tile and the
+// Refunds page so a count can never disagree with the list it summarizes.
+//
+// Deliberately status-only, no deadline test. refunds/scan writes `deadline`
+// as the earliest deadline among AVAILABLE routes, and marks any route whose
+// window has closed unavailable, so a stored deadline is always in the future
+// at write time. A past deadline on a row is therefore just staleness between
+// daily scans, which the next scan clears. Filtering on it here would hide a
+// live case for up to a day and then pop it back, and the merchant_contact
+// route (no deadline) is available on every case regardless.
+export const OPEN_REFUND_STATUSES = ['detected', 'notified'];
+
+export function isOpenRefundCase(refund) {
+  return OPEN_REFUND_STATUSES.includes(refund?.status);
+}
+
 // Progress percent from ordered_at to promised_date, clamped 2-100.
 export function progressPercent(orderedAt, promisedDate) {
   if (!orderedAt || !promisedDate) return null;

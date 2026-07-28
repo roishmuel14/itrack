@@ -1,5 +1,7 @@
-// A detected chance to get money back for a late order. Unique per
-// order_id + policy_key (enforced by refunds/scan upsert, skip dismissed).
+// A detected chance to get money back for a late order: one row per
+// LATE ORDER (unique per owner_email + order_id, enforced in code by
+// refunds/scan's upsert), holding a ranked list of next-step routes rather
+// than one row per policy. See PRD amendment v1.6.
 {
   "name": "RefundOpportunity",
   "type": "object",
@@ -7,21 +9,54 @@
   "description": "A detected chance to claim money back on a late order",
   "properties": {
     "owner_email":     { "type": "string", "format": "email", "description": "App user who owns this opportunity" },
-    "order_id":        { "type": "string", "description": "Order this applies to; unique with policy_key" },
-    "policy_key":      { "type": "string", "description": "e.g. temu_on_time" },
+    "order_id":        { "type": "string", "description": "Order this applies to; unique per owner_email" },
+    "policy_key":      { "type": "string", "description": "Best-matched policy, or generic_late when none matched" },
     "type": {
       "type": "string",
       "enum": ["late_delivery", "buyer_protection", "chargeback_window"]
     },
-    "amount_estimate": { "type": "number", "description": "May be absent for credit-type policies" },
-    "deadline":        { "type": "string", "format": "date", "description": "Claim-by date" },
+    "stage": {
+      "type": "string",
+      "enum": ["late", "likely_lost", "dispute", "delivered_late"],
+      "default": "late",
+      "description": "Escalation stage computed from days_late; drives copy, routes, and draft recipient"
+    },
+    "days_late":       { "type": "integer", "description": "Recomputed every scan" },
+    "delivered_at":    { "type": "string", "format": "date", "description": "When the parcel actually arrived, from the delivered TrackingEvent (delivered_late only). Carried here so consumers never fall back to Order.last_event_at, which is the last event of ANY type" },
+    "amount_estimate": { "type": "number", "description": "Only set when amount_basis is order_total or shipping_fee" },
+    "currency":        { "type": "string", "description": "Copied from the order so consumers never guess" },
+    "amount_basis": {
+      "type": "string",
+      "enum": ["order_total", "shipping_fee", "store_credit", "unknown"],
+      "description": "What amount_estimate means. store_credit/unknown carry NO number"
+    },
+    "routes": {
+      "type": "array",
+      "description": "Ranked next steps, best first. Built by refunds/scan from matched policies",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind":        { "type": "string", "enum": ["merchant_contact", "merchant_policy", "payment_dispute"] },
+          "policy_key":  { "type": "string" },
+          "label":       { "type": "string" },
+          "url":         { "type": "string" },
+          "deadline":    { "type": "string", "format": "date" },
+          "available":   { "type": "boolean", "description": "false = not yet unlocked or needs payment method" },
+          "blocked_by":  { "type": "string", "description": "e.g. unknown_payment_method | not_late_enough | window_closed" },
+          "min_days_late": { "type": "integer", "description": "Threshold this route unlocks at; lets the UI say 'available from N days late'" }
+        }
+      }
+    },
+    "deadline":        { "type": "string", "format": "date", "description": "Earliest deadline among available routes, if any" },
     "status": {
       "type": "string",
       "enum": ["detected", "notified", "dismissed", "claimed", "recovered"],
       "default": "detected"
     },
     "draft_message":   { "type": "string", "maxLength": 2000, "description": "AI-drafted claim" },
-    "claim_url":       { "type": "string", "description": "From policy" }
+    "draft_recipient": { "type": "string", "enum": ["merchant", "payment_provider"], "description": "Who the draft is addressed to" },
+    "draft_stage":      { "type": "string", "description": "Stage the draft was written for; regenerated when it drifts from stage" },
+    "claim_url":       { "type": "string", "description": "From the top available route" }
   },
   "required": ["owner_email", "order_id", "policy_key"],
   "rls": {

@@ -2,7 +2,7 @@
 // no SDK calls, fully unit-testable. The ingest and mutation functions are
 // the only callers; no client ever sets a status directly.
 
-import { isCarrierDomain } from "./senderDomain.ts";
+import { isCarrierDomain, registrableDomain } from "./senderDomain.ts";
 import { carrierKeyFromName } from "./carriers.ts";
 
 export const ADVANCING_STATUSES = ["ordered", "shipped", "in_transit", "out_for_delivery", "delivered"] as const;
@@ -127,6 +127,30 @@ export function normalizeDomain(domain: string | null | undefined): string {
     .replace(/^https?:\/\//, "")
     .replace(/^www\./, "")
     .split("/")[0];
+}
+
+// Brand token for refund-policy matching ONLY (refunds/scan): reduces a
+// domain to its registrable brand, ignoring country TLD and subdomain, so
+// amazon.co.uk, amazon.de, and smile.amazon.com all match a amazon.com
+// policy. Builds on senderDomain's registrable-domain suffix table (single
+// source of truth for multi-part TLDs like co.uk/co.il) rather than a second
+// copy of that list. Deliberately NOT used by normalizeDomain/decideMerge:
+// merchant_domain is half the order merge key, and loosening ITS matching
+// would change which emails merge into which order for every future email
+// (see normalizeDomain above). Policy matching has no such blast radius.
+function policyBrandToken(domain: string): string {
+  const normalized = normalizeDomain(domain);
+  if (!normalized) return "";
+  return registrableDomain(normalized).split(".")[0] ?? "";
+}
+
+export function policyDomainMatches(
+  orderDomain: string | null | undefined,
+  policyDomain: string | null | undefined,
+): boolean {
+  const orderBrand = policyBrandToken(orderDomain ?? "");
+  const policyBrand = policyBrandToken(policyDomain ?? "");
+  return !!orderBrand && !!policyBrand && orderBrand === policyBrand;
 }
 
 export function normalizeOrderNumber(orderNumber: string | null | undefined): string {

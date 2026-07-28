@@ -60,9 +60,21 @@
     // The day the parcel actually landed, as opposed to promised_date/eta_date
     // (forecasts) and last_event_at (when we heard about it). Set once: from the
     // delivery email's date on ingest, or from the date the user picks when they
-    // mark an order delivered by hand.
+    // mark an order delivered by hand. Mirrors RefundOpportunity.delivered_at,
+    // which refunds/scan derives from the delivered TrackingEvent.
     "delivered_at":   { "type": "string", "format": "date", "description": "Day the order was actually delivered" },
-    "is_archived":    { "type": "boolean", "default": false }
+    "is_archived":    { "type": "boolean", "default": false },
+    "payment_method": {
+      "type": "string",
+      "enum": ["paypal", "credit_card", "debit_card", "bit", "apple_pay", "google_pay",
+               "bank_transfer", "cash_on_delivery", "gift_card", "other"],
+      "description": "How the order was paid. Absent = unknown. Gates payment-rail refund routes"
+    },
+    "payment_method_source": {
+      "type": "string",
+      "enum": ["email", "manual"],
+      "description": "manual always wins; email extraction must never overwrite a manual value"
+    }
   },
   "required": ["owner_email", "merchant_name", "status"],
   "rls": {
