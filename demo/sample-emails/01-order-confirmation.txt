@@ -1,0 +1,36 @@
+From: Amazon.com <auto-confirm@amazon.com>
+Subject: Your Amazon.com order #171-8203944-1550612
+Date: Mon, 27 Jul 2026 14:02:11 +0000
+
+Hello,
+
+Thank you for your order. We'll send a confirmation when your items ship.
+
+Order #171-8203944-1550612
+Placed on July 27, 2026
+
+Arriving: Friday, August 14, 2026
+Guaranteed delivery date: August 14, 2026
+
+Your order details:
+
+  Walnut Wood Headphone Stand with Cable Holder
+  Sold by: TidyDesk Living
+  Quantity: 1
+  Price: $34.90
+
+  USB-C to USB-C Braided Charging Cable, 6ft, 100W
+  Sold by: TidyDesk Living
+  Quantity: 2
+  Price: $12.50 each
+
+Item subtotal: $59.90
+Shipping and handling: $0.00
+Order total: $59.90
+
+Payment method: Visa ending in 0000
+
+We hope to see you again soon.
+Amazon.com
+
+(Sample email for iTrack evaluation. Not a real order; paste the whole thing into "Add order".)

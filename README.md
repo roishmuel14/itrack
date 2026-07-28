@@ -15,14 +15,25 @@ Built for the **Base44 Dev Build-Off** (July 2026) on the Base44 developer platf
 - **Requirements:** [PRD.md](PRD.md) - **Build log:** [BUILD_PLAN.md](BUILD_PLAN.md) -
   **Platform feedback:** [FEEDBACK.md](FEEDBACK.md)
 
-> **Ingest status:** manual add (paste an order email or a tracking number) is the live ingest
-> path and drives the whole pipeline. Per-user Gmail auto-sync is fully built (`inbox/syncMyMail`
-> + the app-user connector + `GMAIL_CONNECTOR_ID`) but is gated off (`src/lib/config.js`) because
-> Base44's app-user connector hardcodes its OAuth callback to the unregisterable public-suffix
-> apex `base44.app`, so Google refuses the redirect. This is a Base44 platform bug (custom domain
-> does not help; the built-in Google *login* callback handles domains correctly, the connector one
-> does not) reported in [FEEDBACK.md](FEEDBACK.md). Flip one flag to enable Gmail sync the moment
-> Base44 ships the fix.
+> **Ingest status:** both paths are live. Per-user Gmail sync (`inbox/syncMyMail` + the Base44
+> app-user connector) connects in one click, read-only, and imports the last 60 days of order
+> mail; because the Google consent screen runs in Testing mode, only allowlisted test users can
+> connect a real mailbox. Manual add (paste an order email or a tracking number) is the equal
+> second path, drives the identical pipeline, and works for everyone, including judges.
+
+## Judge it in 60 seconds
+
+1. Open https://i-track-2bdb7160.base44.app and register (any email, or Google).
+2. Click **Add order** and paste the whole of
+   [demo/sample-emails/01-order-confirmation.txt](demo/sample-emails/01-order-confirmation.txt).
+   The LLM pipeline extracts merchant, items, total, and promised date, and a live card appears.
+3. Open the dashboard in a SECOND window, then paste
+   [demo/sample-emails/02-shipping-notice.txt](demo/sample-emails/02-shipping-notice.txt) in the
+   first: it merges into the SAME order (merge engine), the status advances to shipped, the
+   timeline gains a second event with its source snippet and tracking number, and the second
+   window updates without a refresh (realtime subscriptions).
+4. Click the chat bubble and ask "where is my headphone stand?": the agent answers from your own
+   rows only (entity tools inherit RLS; verified with a two-account leak test).
 
 ## How it works
 
@@ -52,7 +63,7 @@ imports the last 60 days of order mail.
 |---|---|
 | Authentication & user management | Built-in Base44 auth (email/password + OTP + Google); per-user isolation via RLS on `owner_email` |
 | Database / entities | 7 entities (`base44/entities/`) with row-level security; writes are service-role-only |
-| Backend functions (Deno) | 9 functions (`base44/functions/`): per-user Gmail sync, refund scan, digest, and every mutation |
+| Backend functions (Deno) | 12 functions (`base44/functions/`): per-user Gmail sync, refund scan, digest, image enrichment, and every mutation |
 | AI / LLM / agents | Email classify+extract with `response_json_schema`, same-order arbitration, claim drafting, `itrack_assistant` agent with entity + function tools |
 | Real-time subscriptions | Dashboard and detail views subscribe to Order + TrackingEvent; cards and toasts update live |
 | File & media storage | Product images and merchant logos re-hosted via `UploadFile` (no hotlinking merchant CDNs) |
@@ -69,22 +80,30 @@ imports the last 60 days of order mail.
 - **One status writer.** The merge engine recomputes order status from the full event history:
   monotonic by construction (max rank), delay annotates without advancing, terminal states stick.
   `scripts/tests/` holds the unit suite (`deno test scripts/tests/`).
-- **Refund radar.** A daily scan matches overdue orders against seeded merchant policies
-  (Temu / AliExpress / Amazon / Shein / PayPal / chargeback windows), upserts one opportunity per
-  order+policy (dismissed never resurfaces), and drafts the claim message with the LLM.
+- **Refund radar, evidence-gated.** A daily scan opens at most ONE case per late order and stages
+  it by lateness (`late` -> `likely_lost` -> `dispute`, or `delivered_late`). A refund route only
+  appears with real evidence: a merchant-policy domain match, or a payment-rail match against how
+  the user actually paid; no evidence means an honest "add how you paid" placeholder, never a
+  fabricated claim. Amounts are honest (only a policy that refunds the order total ever shows a
+  number), claim drafts are stage-aware and addressed to the right party, and a case whose order
+  arrives (or gets archived) is retired automatically. Dismissed never resurfaces.
 
 ## Repo layout
 
 ```
 base44/
   entities/         7 JSONC schemas (RLS included)
-  functions/        9 Deno functions: inbox/syncMyMail, account/, settings/, orders/,
-                    refunds/, digest/
+  functions/        12 Deno functions: inbox/syncMyMail, account/{bootstrap,wipe},
+                    settings/update, orders/{manualAdd,setStatus,setPaymentMethod,
+                    enrichProductImages,backfillImages}, refunds/{scan,updateStatus},
+                    digest/send
   shared/           parse pipeline: htmlToText, extract (LLM), mergeEngine, carriers,
-                    rehost, gmail, pipeline, responses
+                    rehost, gmail, pipeline, enrichPolicy, responses
   agents/           itrack_assistant.jsonc
 src/                Vite + React frontend (pages/, components/, api/, lib/)
+demo/sample-emails/ paste-ready sample order emails for evaluation
 scripts/            base44 exec seed/verify tools + deno unit tests
+tests/              deno unit tests for the pure pipeline logic
 ```
 
 ## Running it
@@ -100,6 +119,8 @@ base44 agents push
 cat scripts/seed-policies.ts | base44 exec   # seed the 6 refund policies
 npm run build && base44 deploy -y
 ```
+
+Unit tests (101 cases over the pure pipeline logic): `deno test tests/ scripts/tests/`.
 
 Gmail sync needs a per-user (app-user) Gmail connector: register a Google OAuth client
 (scope `gmail.readonly`) in Base44 Workspace Settings -> Connectors -> Gmail -> App user
