@@ -10,8 +10,25 @@ const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [settings, setSettings] = useState(null);
+  const [settingsError, setSettingsError] = useState(false);
   const [gmail, setGmail] = useState({ configured: false, connected: false, connector_id: null });
   const [status, setStatus] = useState('loading'); // loading | anonymous | authenticated
+
+  // bootstrap always returns a settings row on success (it creates one
+  // idempotently), so while authenticated: settings === null && !settingsError
+  // means "in flight", and settingsError means "failed, retry available".
+  const loadBootstrap = useCallback(async () => {
+    setSettingsError(false);
+    try {
+      const boot = await invokeFunction('account/bootstrap', {});
+      setSettings(boot.settings);
+      setGmail(boot.gmail ?? { configured: false, connected: false, connector_id: null });
+    } catch (err) {
+      console.error('bootstrap failed', err);
+      setSettings(null);
+      setSettingsError(true);
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     setStatus('loading');
@@ -29,20 +46,14 @@ export function AuthProvider({ children }) {
     if (!me) {
       setUser(null);
       setSettings(null);
+      setSettingsError(false);
       setStatus('anonymous');
       return;
     }
     setUser(me);
     setStatus('authenticated');
-    try {
-      const boot = await invokeFunction('account/bootstrap', {});
-      setSettings(boot.settings);
-      setGmail(boot.gmail ?? { configured: false, connected: false, connector_id: null });
-    } catch (err) {
-      console.error('bootstrap failed', err);
-      setSettings(null);
-    }
-  }, []);
+    await loadBootstrap();
+  }, [loadBootstrap]);
 
   useEffect(() => {
     refresh();
@@ -52,10 +63,12 @@ export function AuthProvider({ children }) {
     () => ({
       user,
       settings,
+      settingsError,
       gmail,
       status,
       isAdmin: user?.role === 'admin',
       refresh,
+      retryBootstrap: loadBootstrap,
       setSettings,
       connectGmail: async () => {
         if (!gmail.connector_id) throw new Error('Gmail connection is not configured yet');
@@ -91,7 +104,7 @@ export function AuthProvider({ children }) {
       resetPassword: (params) => base44.auth.resetPassword(params),
       logout: () => base44.auth.logout(window.location.origin),
     }),
-    [user, settings, gmail, status, refresh],
+    [user, settings, settingsError, gmail, status, refresh, loadBootstrap],
   );
 
   return <AuthContext.Provider value={api}>{children}</AuthContext.Provider>;

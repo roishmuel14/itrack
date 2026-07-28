@@ -1,17 +1,14 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, CheckCircle2, ClipboardPaste, Clock, Loader2, Lock, Mail, Sparkles } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ClipboardPaste, Loader2, Lock, Mail, Sparkles } from 'lucide-react';
 import { useAuth } from '@/api/auth';
 import { useGmailSync } from '@/api/useGmailSync';
 import { useToast } from '@/lib/toast';
-import { GMAIL_CONNECT_ENABLED } from '@/lib/config';
 import { Button } from '@/components/ui/button';
 import ManualAddDialog from '@/components/ManualAddDialog';
 
-// Onboarding. Manual add is the primary path. The per-user Gmail OAuth card
-// is gated behind GMAIL_CONNECT_ENABLED (currently off: blocked by a Base44
-// connector-redirect bug, see src/lib/config.js) and shows a "coming soon"
-// state until the platform fix lands.
+// Onboarding. Manual add is the primary path; the Gmail card offers per-user
+// read-only OAuth connect plus the first inbox scan.
 export default function Onboarding() {
   const { gmail, connectGmail } = useAuth();
   const { sync, syncing, progress } = useGmailSync();
@@ -67,8 +64,7 @@ export default function Onboarding() {
         </Button>
       </div>
 
-      {GMAIL_CONNECT_ENABLED ? (
-        <div className="bg-card rounded-2xl border card-shadow p-6">
+      <div className="bg-card rounded-2xl border card-shadow p-6">
           <p className="text-sm font-semibold mb-1 flex items-center gap-1.5">
             <Mail className="w-4 h-4 text-primary" /> Your Gmail, read-only
           </p>
@@ -105,22 +101,7 @@ export default function Onboarding() {
             Scope: gmail.readonly. We scan for order-related mail from the last 60 days, then keep an
             eye out for new updates every time you open iTrack.
           </p>
-        </div>
-      ) : (
-        <div className="bg-card rounded-2xl border card-shadow p-6 opacity-90">
-          <p className="text-sm font-semibold mb-1 flex items-center gap-1.5">
-            <Mail className="w-4 h-4 text-muted-foreground" /> Automatic Gmail sync
-            <span className="ms-1 inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
-              <Clock className="w-3 h-3" /> coming soon
-            </span>
-          </p>
-          <p className="text-sm text-muted-foreground">
-            One-click, read-only Gmail connect that scans your last 60 days of order mail is built and
-            ready. It is waiting on a Base44 platform fix for per-user OAuth connectors. Until then,
-            pasting an email above tracks any order in seconds.
-          </p>
-        </div>
-      )}
+      </div>
 
       <ManualAddDialog open={addOpen} onClose={() => setAddOpen(false)} onAdded={() => navigate('/')} />
     </div>

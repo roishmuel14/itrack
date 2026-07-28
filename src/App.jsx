@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import { AuthProvider, useAuth } from '@/api/auth';
 import { ToastProvider } from '@/lib/toast';
 import AppShell from '@/components/layout/AppShell';
+import ErrorBoundary from '@/components/ErrorBoundary';
 import Landing from '@/pages/Landing';
 import Login from '@/pages/Login';
 import Dashboard from '@/pages/Dashboard';
@@ -35,22 +36,24 @@ function Gate() {
 
 export default function App() {
   return (
-    <ToastProvider>
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route element={<Gate />}>
-              <Route index element={<Dashboard />} />
-              <Route path="orders/:id" element={<OrderDetail />} />
-              <Route path="onboarding" element={<Onboarding />} />
-              <Route path="refunds" element={<Refunds />} />
-              <Route path="settings" element={<Settings />} />
-              <Route path="login" element={<Navigate to="/" replace />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Route>
-          </Routes>
-        </BrowserRouter>
-      </AuthProvider>
-    </ToastProvider>
+    <ErrorBoundary>
+      <ToastProvider>
+        <AuthProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route element={<Gate />}>
+                <Route index element={<Dashboard />} />
+                <Route path="orders/:id" element={<OrderDetail />} />
+                <Route path="onboarding" element={<Onboarding />} />
+                <Route path="refunds" element={<Refunds />} />
+                <Route path="settings" element={<Settings />} />
+                <Route path="login" element={<Navigate to="/" replace />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Route>
+            </Routes>
+          </BrowserRouter>
+        </AuthProvider>
+      </ToastProvider>
+    </ErrorBoundary>
   );
 }

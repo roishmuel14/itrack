@@ -1,8 +1,9 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Package, ReceiptText, Settings, LogOut } from 'lucide-react';
 import { useAuth } from '@/api/auth';
 import AssistantChat from '@/components/AssistantChat';
 import BrandMark from '@/components/BrandMark';
+import ErrorBoundary from '@/components/ErrorBoundary';
 
 const NAV = [
   { to: '/', label: 'Dashboard', icon: Package, end: true },
@@ -13,6 +14,7 @@ const NAV = [
 export default function AppShell() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const nav = NAV;
 
   return (
@@ -55,9 +57,15 @@ export default function AppShell() {
         </div>
       </header>
       <main className="flex-1 w-full max-w-6xl mx-auto px-4 py-6">
-        <Outlet />
+        {/* Keyed by path: boundaries never reset on child change, so without the
+            key a crashed page would keep its fallback after navigating away. */}
+        <ErrorBoundary key={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </main>
-      <AssistantChat />
+      <ErrorBoundary silent>
+        <AssistantChat />
+      </ErrorBoundary>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  Archive, ArchiveRestore, ArrowLeft, CheckCircle2, ExternalLink, Trash2, Truck,
+  Archive, ArchiveRestore, ArrowLeft, CheckCircle2, ExternalLink, RefreshCw, Trash2, Truck,
 } from 'lucide-react';
 import { Order, Shipment, TrackingEvent, EmailRecord, RefundOpportunity, subscribeTo } from '@/api/entities';
 import { invokeFunction } from '@/api/functions';
@@ -45,7 +45,7 @@ export default function OrderDetail() {
   const [events, setEvents] = useState([]);
   const [emailsById, setEmailsById] = useState({});
   const [refunds, setRefunds] = useState([]);
-  const [state, setState] = useState('loading'); // loading | ready | missing
+  const [state, setState] = useState('loading'); // loading | ready | missing | error
   const [busy, setBusy] = useState(false);
   const [deliveredOpen, setDeliveredOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -80,7 +80,14 @@ export default function OrderDetail() {
       setState('ready');
     } catch (err) {
       console.error(err);
-      setState('missing');
+      const notFound = err?.message === 'not found' || err?.response?.status === 404;
+      if (silent) {
+        // Background reload (realtime tick): a transient failure keeps the last
+        // good data on screen; only a truly vanished order flips the page state.
+        if (notFound) setState('missing');
+        return;
+      }
+      setState(notFound ? 'missing' : 'error');
     }
   }, [id]);
 
@@ -149,6 +156,18 @@ export default function OrderDetail() {
         <p className="text-muted-foreground mb-6">It may have been archived or removed.</p>
         <Button variant="outline" onClick={() => navigate('/')}>
           <ArrowLeft className="w-4 h-4 me-2" /> Back to dashboard
+        </Button>
+      </div>
+    );
+  }
+
+  if (state === 'error') {
+    return (
+      <div className="text-center py-24">
+        <p className="text-lg font-semibold mb-2">Could not load this order</p>
+        <p className="text-muted-foreground mb-6">Check your connection and try again.</p>
+        <Button variant="outline" onClick={() => load()}>
+          <RefreshCw className="w-4 h-4 me-2" /> Retry
         </Button>
       </div>
     );

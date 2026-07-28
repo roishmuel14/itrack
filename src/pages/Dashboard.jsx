@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { ChevronDown, Loader2, Mail, Package, Plus, RefreshCw, Sparkles } from 'lucide-react';
+import { ChevronDown, Loader2, Package, Plus, RefreshCw, Sparkles } from 'lucide-react';
 import { Order, RefundOpportunity, TrackingEvent, subscribeTo } from '@/api/entities';
 import { useAuth } from '@/api/auth';
 import { useGmailSync } from '@/api/useGmailSync';
 import { invokeFunction } from '@/api/functions';
 import { runImageEnrichment } from '@/api/enrichment';
 import { useToast } from '@/lib/toast';
-import { GMAIL_CONNECT_ENABLED } from '@/lib/config';
 import { Button } from '@/components/ui/button';
 import Barcode from '@/components/Barcode';
 import ManualAddDialog from '@/components/ManualAddDialog';
@@ -135,7 +133,7 @@ export default function Dashboard() {
     const unsubOrder = subscribeTo(Order, scheduleReload);
     const unsubEvent = subscribeTo(TrackingEvent, (evt) => {
       if (evt.type === 'create' && evt.data?.title) {
-        toast.info(evt.data.title, evt.data?.description ? undefined : undefined);
+        toast.info(evt.data.title);
       }
       scheduleReload();
     });
@@ -149,7 +147,7 @@ export default function Dashboard() {
   const { sync, syncing, progress } = useGmailSync();
   const syncedOnce = useRef(false);
   useEffect(() => {
-    if (!GMAIL_CONNECT_ENABLED || !gmail.connected || syncedOnce.current) return;
+    if (!gmail.connected || syncedOnce.current) return;
     syncedOnce.current = true;
     sync().then((res) => {
       if (res.ok && res.processed > 0) {
@@ -237,7 +235,7 @@ export default function Dashboard() {
             progress bar, ETA countdown, and a refund alert if it runs late.
           </p>
           <div className="bg-card rounded-2xl border card-shadow p-6 text-start mb-6">
-            {GMAIL_CONNECT_ENABLED && syncing ? (
+            {syncing ? (
               <div className="flex items-center gap-3">
                 <Loader2 className="w-5 h-5 animate-spin text-primary" />
                 <div className="text-sm">
@@ -245,7 +243,7 @@ export default function Dashboard() {
                   <p className="text-muted-foreground">{progress?.processed ?? 0} order emails imported so far</p>
                 </div>
               </div>
-            ) : GMAIL_CONNECT_ENABLED && gmail.connected ? (
+            ) : gmail.connected ? (
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-sm text-muted-foreground">Gmail is connected. Scan your inbox for orders:</p>
                 <Button onClick={() => sync().then((r) => { if (r.ok) { load(); if (r.processed > 0) enrichAfterSync(); } })}>
@@ -263,15 +261,9 @@ export default function Dashboard() {
               </div>
             )}
           </div>
-          {GMAIL_CONNECT_ENABLED ? (
-            <Button variant="outline" onClick={() => setAddOpen(true)}>
-              <Plus className="w-4 h-4 me-1.5" /> Or paste an email instead
-            </Button>
-          ) : (
-            <p className="text-xs text-muted-foreground inline-flex items-center gap-1.5">
-              <Mail className="w-3.5 h-3.5" /> Automatic Gmail sync is coming soon.
-            </p>
-          )}
+          <Button variant="outline" onClick={() => setAddOpen(true)}>
+            <Plus className="w-4 h-4 me-1.5" /> Or paste an email instead
+          </Button>
           <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground mt-8">
             Paste &#183; track &#183; relax
           </p>
@@ -376,7 +368,7 @@ export default function Dashboard() {
           ))}
         </div>
         <div className="flex items-center gap-2">
-          {GMAIL_CONNECT_ENABLED && gmail.connected && (
+          {gmail.connected && (
             <Button
               variant="ghost"
               className="rounded-full px-4 font-mono text-[11px] font-semibold uppercase tracking-[0.12em]"
