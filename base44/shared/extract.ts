@@ -21,6 +21,15 @@ export const PRODUCT_KINDS = [
   "other",
 ] as const;
 
+// Same enum as Order.payment_method / RefundPolicy.payment_rail (PRD
+// amendment v1.6). Single TS source of truth so extraction and
+// orders/setPaymentMethod never drift; the .jsonc schemas duplicate the
+// literal list since JSONC cannot import a JS constant.
+export const PAYMENT_METHODS = [
+  "paypal", "credit_card", "debit_card", "bit", "apple_pay", "google_pay",
+  "bank_transfer", "cash_on_delivery", "gift_card", "other",
+] as const;
+
 export interface ExtractionResult {
   is_order_related: boolean;
   classification: (typeof CLASSIFICATIONS)[number];
@@ -40,6 +49,7 @@ export interface ExtractionResult {
   carrier: string | null;
   tracking_number: string | null;
   status_suggestion: string | null;
+  payment_method: (typeof PAYMENT_METHODS)[number] | null;
   confidence: number;
   notes: string | null;
 }
@@ -86,6 +96,11 @@ export const EXTRACTION_SCHEMA = {
     status_suggestion: {
       type: ["string", "null"],
       enum: ["ordered", "shipped", "in_transit", "out_for_delivery", "delivered", "delayed", "cancelled", "returned", null],
+    },
+    payment_method: {
+      type: ["string", "null"],
+      enum: [...PAYMENT_METHODS, null],
+      description: "How the order was paid. Set ONLY when the email states it explicitly (e.g. 'Paid with PayPal', 'Visa ending 1234', 'שולם באמצעות', 'כרטיס אשראי', 'ביט'). Never infer from the merchant, sender domain, or currency. null when not stated",
     },
     confidence: { type: "number", description: "0-1 confidence in the extraction overall" },
     notes: { type: ["string", "null"], description: "Anything ambiguous worth flagging" },
@@ -167,7 +182,8 @@ export function buildExtractionPrompt(email: EmailForExtraction): string {
     "- Extract ONLY what the email states. Never guess or invent values; use null when absent.",
     "- Carrier and delivery-company notifications (FedEx, UPS, DHL, Israel Post / דואר ישראל, couriers, pickup-point and locker services): the carrier's name goes in the carrier field, NEVER in merchant_domain. merchant_name is the STORE the parcel was bought from when the email reveals it; if no store is named, use the carrier's name so the card stays readable. merchant_domain is the store's bare domain only when you are confident of it; otherwise null. Never output a carrier's or delivery company's domain as merchant_domain.",
     "- Dates: resolve to ISO format (YYYY-MM-DD) using the reference date for relative phrases like 'arriving tomorrow'. A date range like 'Jul 25 - Aug 2' means promised_date is the LAST day.",
-    "- promised_date / eta_date come from arrival-date phrases only, never from payment or billing dates.",
+    "- promised_date / eta_date come from arrival-date phrases only, never from payment or billing dates. This rule is unchanged by the payment_method field below: a payment/billing DATE never belongs in promised_date or eta_date, no matter how explicit the payment method mention is.",
+    "- payment_method: set it ONLY when the email explicitly states how the order was paid ('Paid with PayPal', 'Visa ending 1234', 'charged to your Mastercard', 'שולם באמצעות פייפאל', 'כרטיס אשראי', 'בית עסק חייב', 'שולם בביט'). NEVER infer it from the merchant, the sender domain, the currency, or general billing language ('amount due', 'auto-renews') that carries no explicit payment method. null when not explicitly stated.",
     "- items[].image_url: pick from the numbered image candidates below ONLY if it clearly shows that product; otherwise null. Never output any other URL.",
     "- items[].product_url: pick the link candidate that opens that exact product's page on the store (usually the link wrapping the product image or name). Tracking-wrapped links (click.*, awstrack, etc.) are fine. Never pick order-status, package-tracking, unsubscribe, account, or help links. Null when unsure.",
     "- status_suggestion maps what happened: confirmation->ordered, 'shipped/on its way'->shipped, carrier scan updates->in_transit, 'out for delivery'->out_for_delivery, 'delivered'->delivered, delay notices->delayed.",
@@ -267,17 +283,49 @@ export async function arbitrateSameOrder(
   return result?.same_order === true;
 }
 
-// Claim drafting for refunds/scan (PRD section 8): 3-5 polite sentences,
-// cites order number, promised date, actual status, and the policy.
-export function buildClaimPrompt(orderSummary: string, policyDescription: string): string {
+// Claim drafting for refunds/scan (PRD section 8, amendment v1.6): 3-5
+// polite sentences, addressed to whichever party can actually act (the
+// merchant, or the payment provider for a dispute), with copy matched to
+// how late the order really is. Never states an amount unless one is passed
+// in, and never threatens escalation the order is not old enough to justify.
+export interface ClaimPromptInput {
+  orderSummary: string;
+  stage: "late" | "likely_lost" | "dispute" | "delivered_late";
+  recipient: "merchant" | "payment_provider";
+  remedyDescription: string;
+  // Only ever passed when a real order_total figure backs the claim.
+  amountText?: string;
+}
+
+const STAGE_RULES: Record<ClaimPromptInput["stage"], string> = {
+  late:
+    "The package is late but most likely still in transit. Ask for a status update and mention the merchant's own on-time remedy if one applies. Do NOT threaten a chargeback or a payment dispute at this stage.",
+  likely_lost:
+    "The package is significantly overdue and is likely lost. Ask the merchant to locate it, resend it, or refund it. You may mention that a payment dispute is the next step if this cannot be resolved, but do not word this as a formal dispute yet.",
+  dispute:
+    "The package has been missing for a long time. This message IS the formal claim: state plainly that a dispute/chargeback is being filed under the policy below.",
+  delivered_late:
+    "The package HAS ARRIVED, just after the promised date. Do not ask for a refund of the purchase or claim it is missing; ask specifically for the merchant's own late-delivery credit or compensation under their stated policy.",
+};
+
+export function buildClaimPrompt(input: ClaimPromptInput): string {
+  const recipientRule = input.recipient === "payment_provider"
+    ? "Address this to the PAYMENT PROVIDER (PayPal, or the card issuer for a chargeback), not the merchant: this is a dispute filing, not a support message."
+    : "Address this to the MERCHANT's customer support team.";
+  const amountRule = input.amountText
+    ? `You may state the amount at stake: ${input.amountText}.`
+    : "Do not state or imply any specific amount; the exact remedy is up to the merchant or provider.";
   return [
-    "Draft a short, polite refund/compensation claim message a customer can send to a merchant's support.",
-    "Rules: 3-5 sentences. Cite the order number, the promised delivery date, and that it has not arrived (or arrived late). Reference the policy below. Never invent amounts, dates, or promises not present in the input. Plain text, no placeholders, no subject line.",
+    "Draft a short, polite claim/status message.",
+    "Rules: 3-5 sentences. Cite the order number and the promised delivery date. Plain text, no placeholders, no subject line. Never invent facts, dates, amounts, or promises not present in the input below.",
+    recipientRule,
+    STAGE_RULES[input.stage],
+    amountRule,
     "",
     "Order:",
-    orderSummary,
+    input.orderSummary,
     "",
-    "Applicable policy:",
-    policyDescription,
+    "Applicable policy / remedy:",
+    input.remedyDescription,
   ].join("\n");
 }

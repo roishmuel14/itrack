@@ -6,6 +6,13 @@
 import { createClientFromRequest } from "npm:@base44/sdk";
 
 const ACTIVE_STATUSES = ["ordered", "shipped", "in_transit", "out_for_delivery", "delayed"];
+const OPEN_REFUND_STATUSES = ["detected", "notified"];
+const STAGE_LABEL: Record<string, string> = {
+  late: "late",
+  likely_lost: "likely lost",
+  dispute: "in dispute",
+  delivered_late: "arrived late",
+};
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
@@ -38,10 +45,12 @@ Deno.serve(async (req) => {
         skipped++;
         continue;
       }
-      const [orders, refunds] = await Promise.all([
+      const [orders, allRefunds] = await Promise.all([
         service.Order.filter({ owner_email: owner, is_archived: false }, undefined, 1000),
-        service.RefundOpportunity.filter({ owner_email: owner, status: "detected" }, undefined, 200),
+        service.RefundOpportunity.filter({ owner_email: owner }, undefined, 200),
       ]);
+      const ordersById = new Map(orders.map((o: any) => [o.id, o]));
+      const refunds = allRefunds.filter((r: any) => OPEN_REFUND_STATUSES.includes(r.status));
       const active = orders.filter((o: any) => ACTIVE_STATUSES.includes(o.status));
       const arrivingToday = active.filter((o: any) => (o.eta_date ?? o.promised_date) === today);
       const newlyOverdue = active.filter((o: any) => o.promised_date === yesterday);
@@ -61,7 +70,14 @@ Deno.serve(async (req) => {
         `<p style="margin:0;color:#6b7280">${today}</p>`,
         section("Arriving today", arrivingToday.map((o: any) => `<b>${o.merchant_name}</b>${o.order_number ? ` (order ${o.order_number})` : ""}`)),
         section("Just went overdue", newlyOverdue.map((o: any) => `<b>${o.merchant_name}</b>${o.order_number ? ` (order ${o.order_number})` : ""} - promised ${o.promised_date}`)),
-        section("Refund deadlines in the next 3 days", deadlineSoon.map((r: any) => `<b>${r.policy_key}</b> - claim by ${r.deadline}`)),
+        section(
+          "Refund deadlines in the next 3 days",
+          deadlineSoon.map((r: any) => {
+            const merchant = (ordersById.get(r.order_id) as any)?.merchant_name ?? "your order";
+            const stageLabel = STAGE_LABEL[r.stage] ?? "late";
+            return `<b>${merchant}</b> (${stageLabel}) - claim by ${r.deadline}`;
+          }),
+        ),
         `<p style="margin:16px 0 0"><a href="https://i-track-2bdb7160.base44.app" style="color:#4F46E5">Open your dashboard</a></p>`,
         `</div>`,
       ].join("");
