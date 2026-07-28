@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  Archive, ArchiveRestore, ArrowLeft, CheckCircle2, ExternalLink, Truck,
+  Archive, ArchiveRestore, ArrowLeft, CheckCircle2, ExternalLink, Trash2, Truck,
 } from 'lucide-react';
 import { Order, Shipment, TrackingEvent, EmailRecord, RefundOpportunity, subscribeTo } from '@/api/entities';
 import { invokeFunction } from '@/api/functions';
 import { useToast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 import CopyButton from '@/components/CopyButton';
+import ConfirmDialog from '@/components/ConfirmDialog';
+import DeliveredDialog from '@/components/DeliveredDialog';
 import { MerchantLogo } from '@/components/MerchantImage';
 import PaymentMethodPicker from '@/components/refunds/PaymentMethodPicker';
 import { CHIP_BASE, countdownText, daysUntil, formatDate, formatDateTime, formatMoney, isOpenRefundCase, progressPercent, refundStageChip, statusChip } from '@/lib/format';
@@ -45,6 +47,8 @@ export default function OrderDetail() {
   const [refunds, setRefunds] = useState([]);
   const [state, setState] = useState('loading'); // loading | ready | missing
   const [busy, setBusy] = useState(false);
+  const [deliveredOpen, setDeliveredOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const reloadTimer = useRef(null);
 
   const load = useCallback(async (silent = false) => {
@@ -96,19 +100,28 @@ export default function OrderDetail() {
     };
   }, [load]);
 
-  const act = async (action) => {
+  const act = async (action, extra = {}) => {
     setBusy(true);
     try {
-      await invokeFunction('orders/setStatus', { order_id: id, action });
-      if (action === 'mark_delivered') toast.success('Marked delivered', 'Nice, another one home.');
+      await invokeFunction('orders/setStatus', { order_id: id, action, ...extra });
+      if (action === 'mark_delivered') {
+        setDeliveredOpen(false);
+        toast.success('Marked delivered', `Arrived ${formatDate(extra.delivered_at)}. Nice, another one home.`);
+      }
       if (action === 'archive') {
         toast.success('Order archived');
         navigate('/');
         return;
       }
+      if (action === 'delete') {
+        setDeleteOpen(false);
+        toast.success('Order deleted', 'The order and its history are gone.');
+        navigate('/');
+        return;
+      }
       await load(true);
     } catch (err) {
-      toast.notifyError(err, 'Cannot update order');
+      toast.notifyError(err, action === 'delete' ? 'Cannot delete order' : 'Cannot update order');
     } finally {
       setBusy(false);
     }
@@ -184,7 +197,9 @@ export default function OrderDetail() {
               <span>Ordered {formatDate(order.ordered_at)}</span>
               <span className={overdue ? 'text-[hsl(var(--status-overdue))] font-semibold' : ''}>
                 {order.status === 'delivered'
-                  ? 'Delivered'
+                  ? order.delivered_at
+                    ? `Delivered ${formatDate(order.delivered_at)}`
+                    : 'Delivered'
                   : countdownText(order.eta_date || order.promised_date)}
                 {order.promised_date && ` (promised ${formatDate(order.promised_date)})`}
               </span>
@@ -215,13 +230,21 @@ export default function OrderDetail() {
 
         <div className="flex items-center gap-2 mt-5 flex-wrap">
           {!['delivered', 'cancelled', 'returned'].includes(order.status) && (
-            <Button onClick={() => act('mark_delivered')} disabled={busy} variant="outline">
+            <Button onClick={() => setDeliveredOpen(true)} disabled={busy} variant="outline">
               <CheckCircle2 className="w-4 h-4 me-1.5 text-[hsl(var(--status-delivered))]" /> Mark delivered
             </Button>
           )}
           <Button onClick={() => act(order.is_archived ? 'unarchive' : 'archive')} disabled={busy} variant="ghost">
             {order.is_archived ? <ArchiveRestore className="w-4 h-4 me-1.5" /> : <Archive className="w-4 h-4 me-1.5" />}
             {order.is_archived ? 'Unarchive' : 'Archive'}
+          </Button>
+          <Button
+            onClick={() => setDeleteOpen(true)}
+            disabled={busy}
+            variant="ghost"
+            className="text-[hsl(var(--status-overdue))] hover:bg-[hsl(var(--status-overdue-bg))] ms-auto"
+          >
+            <Trash2 className="w-4 h-4 me-1.5" /> Delete
           </Button>
         </div>
       </div>
@@ -322,6 +345,23 @@ export default function OrderDetail() {
           </ol>
         )}
       </div>
+
+      <DeliveredDialog
+        open={deliveredOpen}
+        order={order}
+        busy={busy}
+        onConfirm={(deliveredAt) => act('mark_delivered', { delivered_at: deliveredAt })}
+        onClose={() => setDeliveredOpen(false)}
+      />
+      <ConfirmDialog
+        open={deleteOpen}
+        title="Delete this order?"
+        body={`The ${order.merchant_name} order, its shipments, timeline, and refund alerts are removed for good. Syncing your inbox again will not bring it back.`}
+        confirmLabel="Delete order"
+        busy={busy}
+        onConfirm={() => act('delete')}
+        onClose={() => setDeleteOpen(false)}
+      />
     </div>
   );
 }

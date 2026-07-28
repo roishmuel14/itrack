@@ -671,17 +671,21 @@ export async function runCorePipeline(
     const priorOrder: any = myOrders.find((o: any) => o.id === orderId);
     const prevLast: string | undefined = priorOrder?.last_event_at;
     const lastEventAt = prevLast && prevLast > occurredAt ? prevLast : occurredAt;
-    await service.Order.update(orderId, {
-      status: newStatus,
-      last_event_at: lastEventAt,
-    });
+    // delivered_at is write-once: the first email that puts the order in the
+    // delivered state dates the arrival, and later mail (a review request, a
+    // receipt) must not redate it. A user's manual pick is preserved too.
+    const orderPatch: Record<string, unknown> = { status: newStatus, last_event_at: lastEventAt };
+    if (newStatus === "delivered" && !priorOrder?.delivered_at) {
+      orderPatch.delivered_at = occurredAt.slice(0, 10);
+    }
+    await service.Order.update(orderId, orderPatch);
     // Invariant: after an email is processed, its order is in the run cache
     // with current values, so the next email of this run never re-reads a
     // stale row through read-after-write lag.
     const cacheRow = runCache?.orders.find((o) => o.id === orderId);
-    if (cacheRow) Object.assign(cacheRow, { status: newStatus, last_event_at: lastEventAt });
+    if (cacheRow) Object.assign(cacheRow, orderPatch);
     else if (priorOrder) {
-      runCache?.orders.push({ ...priorOrder, id: orderId, status: newStatus, last_event_at: lastEventAt });
+      runCache?.orders.push({ ...priorOrder, id: orderId, ...orderPatch });
     }
     if (shipmentId) {
       const shipmentEvents = allEvents.filter((e: any) => e.shipment_id === shipmentId);

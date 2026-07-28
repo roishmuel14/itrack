@@ -91,8 +91,12 @@ Deno.serve(async (req) => {
     // "N days late, still not delivered".
     const qualify = (order: any) => {
       const delivered = order.status === "delivered";
+      // Order.delivered_at is the second-choice source, not last_event_at: it is
+      // written from the same delivered event (or the day the user picked when
+      // marking delivered by hand), so falling back to it keeps the "latest
+      // event of ANY type" problem above out of the number entirely.
       const deliveredAt = delivered
-        ? String(deliveredAtByOrder.get(order.id) ?? order.last_event_at ?? "")
+        ? String(deliveredAtByOrder.get(order.id) ?? order.delivered_at ?? order.last_event_at ?? "")
         : "";
       if (delivered && !deliveredAt) return null; // no delivery date to measure against
       const anchorDate = delivered ? deliveredAt.slice(0, 10) : today;

@@ -57,6 +57,12 @@
     },
     "confidence":     { "type": "number", "description": "0-1 from extraction; <0.6 shows a badge" },
     "last_event_at":  { "type": "string", "format": "date-time" },
+    // The day the parcel actually landed, as opposed to promised_date/eta_date
+    // (forecasts) and last_event_at (when we heard about it). Set once: from the
+    // delivery email's date on ingest, or from the date the user picks when they
+    // mark an order delivered by hand. Mirrors RefundOpportunity.delivered_at,
+    // which refunds/scan derives from the delivered TrackingEvent.
+    "delivered_at":   { "type": "string", "format": "date", "description": "Day the order was actually delivered" },
     "is_archived":    { "type": "boolean", "default": false },
     "payment_method": {
       "type": "string",
