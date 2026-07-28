@@ -1,0 +1,28 @@
+From: Amazon.com <shipment-tracking@amazon.com>
+Subject: Your Amazon.com order #171-8203944-1550612 has shipped
+Date: Tue, 28 Jul 2026 09:47:35 +0000
+
+Hello,
+
+Your package is on the way.
+
+Order #171-8203944-1550612
+
+Shipped via: UPS
+Tracking number: 1Z999AA10123456784
+Arriving: Friday, August 14, 2026
+
+Items in this shipment:
+
+  Walnut Wood Headphone Stand with Cable Holder
+  Quantity: 1
+
+  USB-C to USB-C Braided Charging Cable, 6ft, 100W
+  Quantity: 2
+
+Track your package anytime from Your Orders.
+
+Amazon.com
+
+(Sample email for iTrack evaluation. Not a real shipment; paste the whole thing into "Add order"
+after the confirmation email and watch it merge into the same card.)

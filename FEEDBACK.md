@@ -318,7 +318,74 @@ bugs. On submission day this file becomes the answers to the three required ques
 
 ## Detailed notes / comparisons
 
-- (overall experience, workflow notes, comparisons to Supabase/Firebase, added along the way)
+- Compared to wiring Supabase + a mail parser + an LLM + a chat framework yourself, Base44's win
+  is that the vertical slices compose: auth, RLS, entities, functions, realtime, storage, and an
+  agent shared one data model and one deploy story, and the security boundary (RLS keyed on a
+  server-stamped owner column) held across every surface we tested, including agent tools and
+  realtime rooms. The losses are observability (logs we could not trust as negative evidence) and
+  the CLI/no-code seam: scheduling lives only behind a builder prompt, agents cannot be read back,
+  and one SDK default (serverUrl) cost us most of a day. Net: we would build on it again, and the
+  full dated log above is the map of where the paper cuts are.
+
+## Submission paste (composed 2026-07-28; the three required answers + bugs, ready to copy)
+
+### Q1: What BaaS capabilities worked well or felt great to use?
+
+The best thing we tested all week: RLS holds on EVERY surface without app code. Agent entity tools
+inherit it (a second non-admin account ran an UNFILTERED read_Order through the agent and got only
+its own row while another account owned 11), and realtime subscribe() filters broadcasts
+per-subscriber (account B received only its own 5 events while account A's rows churned in the same
+rooms). We verified both with two-account leak tests instead of assuming, and the platform passed;
+that is the entire security story of a per-user product, for free. WhatsApp was the largest
+effort-gap vs doing it ourselves: one greeting line in the agent jsonc plus getWhatsAppConnectURL(),
+and a real phone got tool-backed, correctly-scoped answers first try; no webhooks, numbers, or
+template approvals. InvokeLLM with response_json_schema was reliably structured across ~40 real
+merchant emails (correct order numbers, totals, date-range resolution, honest confidence), and it
+composes with add_context_from_internet. base44 exec made the whole backend verifiable headlessly.
+entities push registered full schemas incl. RLS blocks 1:1 first try. The bundled .agents/skills
+reference docs were accurate throughout, and the 4xx {error, reasons[]} pattern surfacing on
+err.response.data made server-to-toast error plumbing trivial.
+
+### Q2: Where did you get stuck, confused, or blocked?
+
+Full dated log with repros in FEEDBACK.md in the repo; the expensive ones: (1) Per-user Gmail OAuth
+(BYO Google client, app-user connector) failed with redirect_uri_mismatch: Google refuses the
+base44.app apex (Public Suffix List). We burned most of a day, including a custom-domain detour that
+did NOT help, before finding the real cause: the connect-initiate endpoint mirrors the REQUEST host
+into redirect_uri, and the SDK's createClient defaults serverUrl to the apex instead of deriving it
+from appBaseUrl, so the browser initiated on the apex. Fix was app-side (initiate on
+window.location.origin), but the default is a trap, and the CLI probe masked it by resolving the
+slug (false positive). Asks: derive serverUrl from appBaseUrl or normalize the connector redirect
+host like the login callback already does. (2) Scheduling: new apps are Workflows-only, so
+function.jsonc automations 409 while docs still present them as the mechanism, and the only write
+path is a builder-chat prompt, which mis-applied our explicit daily cadences as every-15-minutes
+and spammed a dozen digest emails overnight. (3) base44 logs cannot be trusted as negative
+evidence: verified-real invocations returned "No logs found", the no-args form times out on the
+fan-out, and --env prod says "Has this app been published?" for a live CLI-deployed app (preview IS
+production). (4) Entity reads are not read-your-writes consistent, which silently duplicated
+orders until we added a per-run cache. (5) In Node, subscribe() connects anonymously and silently
+receives nothing unless the token is passed to createClient.
+
+### Q3: What was missing, or what would you add?
+
+(1) A service-role path to app-user connector tokens (or per-user connector automations):
+getCurrentAppUserConnection is request-scoped only, so a cron cannot iterate users and sync their
+mailboxes; this forced our product to foreground-only sync and blocks a whole class of per-user
+sync apps. (2) base44 agents list/pull/diff: agents push is a blind full replace; the only way to
+verify what the platform holds is eyeballing the dashboard (we matched a 123-character greeting by
+its length). (3) Agent tool results serialized as JSON: today they are Python repr strings
+(single quotes, None, datetime.datetime(...)) inside a TypeScript-typed field, so nothing
+programmatic can parse them. (4) A declarative CLI write path for Workflows (base44 workflows
+push), or auto-convert function.jsonc automations on Workflows apps; plus have the builder echo
+back the parsed trigger spec before creating. (5) A documented read-after-write consistency model
+for entities (or a strong-read option on filter()). (6) Docs: an agent-channels overview
+(getTelegramConnectURL exists undocumented), the realtime docs page is placeholder text, and note
+that headless Node realtime needs the token in createClient.
+
+### Bugs field (optional box): paste the "Bugs (with repro)" section above, plus these from the
+### stuck list: function.jsonc breaks base44/shared imports at deploy (repro'd 3x); resend-otp
+### discloses account existence while reset-password-request correctly does not; verifyOtp silently
+### drops a mis-named param producing a user-facing dead end.
 
 ## NPS (fill at submission)
 
