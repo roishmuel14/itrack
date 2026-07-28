@@ -6,6 +6,32 @@ bugs. On submission day this file becomes the answers to the three required ques
 
 ## What worked well
 
+- 2026-07-27: **Agent entity tools inherit RLS correctly, and that is the single best thing we
+  tested all build.** Our whole assistant feature rested on an unproven assumption: that an agent
+  reading `Order`/`Shipment`/`TrackingEvent` on behalf of a signed-in user cannot see other users'
+  rows. Verified from a second, NON-admin account (`scripts/agent-leak-test.mjs`): the agent issued
+  `read_Order` with an UNFILTERED `{"query": {}}` and got back exactly ONE row, its own, while the
+  other account owned 11. User-scoped agent memory held too: account B's "what do you remember about
+  me?" came back empty minutes after account A saved a memory. Zero app code was needed to get this
+  right, which is exactly how it should be, and it is worth documenting explicitly because right now
+  a developer has no way to know it without testing it themselves.
+
+- 2026-07-27: **WhatsApp needed zero backend work and the round trip worked first try.** From an
+  agent that already existed, the entire cost of a second channel was one `whatsapp_greeting` line
+  in the agent jsonc and a link built by `getWhatsAppConnectURL()`. On a real phone: send the
+  prefilled activation message, get the greeting back, ask "where's my Mikasa ball?", and the same
+  tool-backed answer arrives as in the web chat, correctly scoped to that account's own orders. No
+  webhook, no number provisioning, no message-template approval, no session-window handling. Having
+  built a WhatsApp integration the normal way before, this is the single largest effort gap between
+  Base44 and doing it yourself that we hit in this build.
+
+- 2026-07-27: **Nested function-tool names resolve.** `{ "function_name": "orders/manualAdd" }` in
+  an agent's `tool_configs` works with the slash intact: the tool call comes back named exactly
+  `orders/manualAdd` with `status: "success"`. Our 4xx error contract also survives the trip: a
+  function returning `{ error, reasons: [{code: "tracking_invalid", message: "That tracking number
+  looks too short"}] }` reached the user as "the tracking number 'AB1' is too short to be valid",
+  not a generic apology. Undocumented, worth documenting.
+
 - 2026-07-22: `base44 create --template backend-and-client` into a NON-empty directory just
   worked, kept our existing docs, and shipped an `.agents/skills/` folder with genuinely accurate
   CLI + SDK reference docs. Those bundled docs (entities.md, base44-agents.md, auth.md) were the
@@ -31,8 +57,55 @@ bugs. On submission day this file becomes the answers to the three required ques
   account A's, which were churned in the same rooms during the same window. The server filters the
   broadcast by row ownership before delivery - exactly what we needed and could not safely assume.
   PRD risk #2 (subscribe leaking across users) closed; no polling fallback required.
+- 2026-07-27: **`InvokeLLM` with `add_context_from_internet: true` composes cleanly with
+  `response_json_schema`.** Used for three different web lookups (merchant official-domain guess,
+  brand-logo discovery, product search) and the structured output held every time. One behavioral
+  note worth documenting: with internet context the model reliably identifies PAGES (a Wikipedia
+  article, a product page, a CDN host) but frequently invents the deep asset path (Wikimedia thumb
+  URLs carry an MD5 hash prefix it cannot know; retailer CDN paths came back plausible but 404).
+  The winning pattern was "LLM names the page, deterministic code resolves the asset": Wikipedia
+  images list + imageinfo API for logos, og:image/JSON-LD extraction for product pages. Worth a
+  docs example, since naive "return an image URL" prompts look like they work and then 404.
 
 ## Where we got stuck / confused
+
+- 2026-07-27: **The WhatsApp "Connect" button is not what its name implies, and there is no visible
+  channel state anywhere.** We expected an enable/disable channel toggle (and had planned around a
+  rumoured "3 agents with WhatsApp per workspace" cap). What the green **Connect** button on
+  Agents -> agent -> WhatsApp actually does is open `api.whatsapp.com/send/` with a per-click
+  activation code, i.e. it is the exact same thing as the SDK's `getWhatsAppConnectURL()`: an
+  end-user deep link, not an admin action. Two consequences we had to discover by clicking: (a) the
+  channel appears to be live for every agent already, so there was nothing to "enable" and no cap
+  surfaced anywhere in the UI; (b) every click mints a NEW activation code against a DIFFERENT
+  pooled number (we saw three distinct US numbers in five minutes), which is alarming the first time
+  you see it because it reads like the previous link was invalidated. Asks: rename the button to
+  something like "Get connect link", show the channel's actual state and assigned number on the
+  agent card, and document the cap (or confirm there is none).
+
+- 2026-07-27: **`getTelegramConnectURL` exists in the SDK and a Telegram tab exists in the agent
+  config, but neither appears in the docs we could find.** It sits right next to
+  `getWhatsAppConnectURL` in `AgentsModule` with a full doc comment, so it is clearly intentional;
+  it just never shows up when you go looking for "what channels can my agent use". A one-line
+  channels overview in the agents docs would have saved us guessing.
+
+- 2026-07-26 (live, one occurrence, hypothesis): **a `functions deploy` may not serve the new
+  bundle immediately.** We changed the Gmail search string inside `inbox/syncMyMail` (removed a
+  `from:` sender), deploy reported success, and a sync triggered ~18 minutes later STILL listed 16
+  emails only the OLD query matches (all from the removed sender). A second sync ~15 minutes after
+  that used the new query (those 16 no longer listed, same 60-day window). Same function, no code
+  change in between, so either warm instances keep serving the previous bundle for a while or
+  registration completes async after the CLI returns. Repro odds unknown; worth knowing that
+  "deployed" does not always mean "what runs on the next invocation".
+- 2026-07-26 (live, systematic across ~40 real emails): **`InvokeLLM` follows enum fields far
+  better than prose exclusion rules.** A prompt with an explicit "always irrelevant" list (SaaS,
+  food delivery, flights) was ignored at 0.9+ confidence whenever the email LOOKED like an order
+  receipt: Wolt food receipts, Atlassian/Namecheap SaaS orders, and a flight booking all came back
+  `is_order_related: true`. Adding a required `product_kind` enum to `response_json_schema`
+  (physical_goods / food_or_grocery_delivery / digital_or_saas / service_or_booking / other) fixed
+  it completely: every one of the same emails was tagged with the right kind at confidence 1, and
+  the relevance decision moved into backend code keyed on that enum. Rule of thumb for InvokeLLM:
+  make the model NAME facts via schema enums; never ask it to fold an exclusion policy into a
+  boolean.
 
 - 2026-07-22 (CLI 0.1.5, live, repro'd 3x): **A `function.jsonc` in the function folder breaks
   `base44/shared/` imports at deploy.** With `base44/functions/inbox/sweep/{entry.ts,function.jsonc}`,
@@ -86,6 +159,17 @@ bugs. On submission day this file becomes the answers to the three required ques
   for a nonexistent address, so it can be used to enumerate which emails have accounts. Suggestion:
   make resend-otp respond 200 unconditionally, like the reset request does.
 
+- 2026-07-26 (CLI 0.1.5): **`base44 logs --env prod` reports nothing for a CLI-deployed app that is
+  live and serving real users, and the wording implies the app was never shipped.** Our app is
+  deployed with `base44 deploy`, serves real traffic on its `*.base44.app` URL, and runs scheduled
+  workflows daily - yet `--env prod` answers `No production logs found. Has this app been published?`
+  while every real run (user function calls AND scheduled workflow runs) appears under
+  `--env preview`. So for a CLI-first app, "preview" IS production, and the flag that sounds like
+  the live environment is the empty one. That is a genuinely alarming message to read mid-verification
+  (we briefly thought the deployment was gone). Suggestions: (a) note in `--help` and the docs that
+  CLI-deployed apps log under `preview` because `prod` refers to the builder's Publish flow, or
+  (b) make the empty-prod message say so explicitly instead of asking whether the app was published.
+
 - 2026-07-23 (SDK 0.8.3, Node headless): **The realtime `subscribe()` socket connects ANONYMOUSLY
   and silently in Node - zero events, no error - when the token is not passed to `createClient`.**
   `client.js` sets `socketConfig.token` from `createClient(config).token`, and the only fallback is
@@ -107,8 +191,27 @@ bugs. On submission day this file becomes the answers to the three required ques
   shared connectors. Per-user webhook triggers (or a `getAppUserConnection(userId)`) would unlock
   a whole class of per-user sync products without polling.
 
+- 2026-07-27: **No `agents list` / `agents pull`, so a pushed agent config is unverifiable from the
+  CLI.** `agents push` is a full replace and prints only "Updated: <name>"; there is no way to read
+  back what the platform currently holds. We could only confirm our config had landed by opening the
+  dashboard and eyeballing the Welcome Message character count (123/500 matched our
+  `whatsapp_greeting` exactly). Ask: `base44 agents list` plus a `pull`/`diff` that writes the remote
+  config back as jsonc, the way `entities` and `functions` can be inspected.
+
+- 2026-07-27: **Agent tool results come back as PYTHON REPR strings, not JSON.** A tool call's
+  `results` field looks like `[{'merchant_name': 'Salomon', 'price': None, 'created_date':
+  datetime.datetime(2026, 7, 27, ...), 'is_sample': False}]`: single quotes, `None`, `False`, and
+  bare `datetime.datetime(...)` constructor calls. `JSON.parse` fails on every one, so anything
+  programmatic (tests, audit tooling, a UI that renders tool output) has to string-match. This leaks
+  the backend's Python implementation through a documented TypeScript-typed field
+  (`AgentMessageToolCall.results: string`). Ask: serialize tool results as JSON.
+
 ## Bugs (with repro)
 
+- 2026-07-27 (CLI 0.1.5): **`base44 logs` (no args, 11 functions) times out** with
+  `Request timed out: GET .../functions-mgmt/orders%2FenrichProductImages/logs` when it walks all
+  functions; `base44 logs --function <name>` for the same function succeeds instantly. Looks like
+  the all-functions fan-out shares one short timeout. Workaround: always pass `--function`.
 - 2026-07-23 (BLOCKER for BYO app-user Gmail OAuth on a default `<slug>.base44.app` app):
   **The app-user connector OAuth flow redirects to the APEX `https://base44.app/api/external-auth/callback`,
   which Google refuses to register because `base44.app` is on the Public Suffix List** (like

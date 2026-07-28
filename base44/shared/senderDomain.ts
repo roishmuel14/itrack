@@ -57,7 +57,7 @@ const ESP_BLOCKLIST = new Set([
 // Carriers ship for everyone, so their domain never identifies the merchant.
 const CARRIER_DOMAINS = new Set([
   "fedex.com", "ups.com", "usps.com", "usps.gov", "dhl.com", "dhl.de", "dhlparcel.com",
-  "israelpost.co.il", "aramex.com", "tnt.com", "gls-group.com", "dpd.com", "dpdgroup.com",
+  "israelpost.co.il", "postil.co.il", "aramex.com", "tnt.com", "gls-group.com", "dpd.com", "dpdgroup.com",
   "royalmail.com", "canadapost.ca", "purolator.com", "ontrac.com", "lasership.com",
   "evri.com", "hermesworld.com", "yodel.co.uk", "correos.es", "poste.it", "chronopost.fr",
   "colissimo.fr", "postnord.com", "bring.com", "posti.fi", "ptt.gov.tr",
@@ -84,6 +84,36 @@ export function registrableDomain(host: string): string {
   if (parts.length <= 2) return parts.join(".");
   const lastTwo = parts.slice(-2).join(".");
   return MULTI_PART_SUFFIXES.has(lastTwo) ? parts.slice(-3).join(".") : lastTwo;
+}
+
+// True when the domain belongs to a carrier / logistics platform. The merge
+// engine uses this to treat carrier-attributed merchant_domain values as
+// wildcards: a carrier ships for everyone, so its domain never identifies the
+// merchant and must not gate same-order matching (the FedEx-card duplicate).
+export function isCarrierDomain(domain: string | null | undefined): boolean {
+  if (!domain) return false;
+  const host = domain
+    .toLowerCase()
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split("/")[0];
+  if (!host) return false;
+  return CARRIER_DOMAINS.has(registrableDomain(host));
+}
+
+// True for domains that can never be a merchant's own site: mail vendors,
+// consumer mailbox providers, and BARE hosted-store platforms (a platform
+// subdomain like acme.myshopify.com is a real merchant and passes). Used to
+// validate LLM-guessed merchant domains before the logo ladder runs on them.
+// Carriers are deliberately ALLOWED: when the merchant on the card IS FedEx
+// (an order created from a carrier email), fedex.com is exactly the right logo.
+export function isNonMerchantDomain(domain: string): boolean {
+  const host = domain.toLowerCase().trim();
+  if (!host) return true;
+  const reg = registrableDomain(host);
+  if (PLATFORM_SUFFIXES.has(reg)) return host === reg;
+  return ESP_BLOCKLIST.has(reg) || MAILBOX_PROVIDERS.has(reg);
 }
 
 // Returns { domain: null } whenever the sender cannot be trusted to represent the

@@ -97,17 +97,61 @@ in FEEDBACK.md.
 - [x] Stage 4: Frontend shell + shared kit - deployed 2026-07-22 (tokens, auth+OTP+Google, api
       wrappers with reasons-toasts, formatters, empty dashboard; login verified signed-out at
       375px, error toast verified via DOM)
-- [~] Stage 5: Dashboard + timeline + onboarding - ALL UI deployed (stats, filters, cards with
-      progress+today marker, realtime subscriptions, detail+timeline+snippets, onboarding with
-      confirmForwarding assist, manual add, activity feed); remaining: authenticated click-through
-      + two-window realtime test (needs a browser session), narrow-viewport pass on inner screens
-- [~] Stage 6: Refund radar + digest - ALL functions + screens deployed; scan verified live
+- [x] Stage 5: Dashboard + timeline + onboarding - COMPLETE 2026-07-26 (MILESTONE 1: daily usable).
+      All UI deployed (stats, filters, cards with progress+today marker, realtime subscriptions,
+      detail+timeline+snippets, onboarding with Connect Gmail + paste-an-email, manual add, activity
+      feed). Roi verified the remaining live items in a browser session on the deployed app
+      (2026-07-26): authenticated click-through, two-window realtime, narrow-viewport inner screens.
+- [x] Stage 6: Refund radar + digest - ALL functions + screens deployed; scan verified live
       (AC1 exactly-one, AC2 no-dupes, AC3 dismiss holds, draft cites order number), digest send +
-      skip-when-off verified live; remaining: workflows for 03:00/07:00 crons, wipe leak-test rerun
-- [~] Stage 7: Assistant agent - itrack_assistant pushed with user-scoped memory; in-app chat
-      widget deployed; agent answered "Where are my LED strip lights?" correctly from entity tools
-      (headless test). Remaining: WhatsApp enable (Roi, dashboard), two-account isolation gate
+      skip-when-off verified live. **Scheduled crons CONFIRMED in `base44 logs` 2026-07-26: two
+      real runs each, on consecutive days.** `refunds/scan` fired 07-25 03:03:37 and 07-26 03:04:56
+      UTC (cron `0 3 * * *`), both `{ok:true, overdue_orders:10, created:0, skippedExisting:16}` -
+      a real scheduled run proving F5 AC2 (re-scan creates no duplicates). `digest/send` fired
+      07-25 07:02:16 (`sent:0, skipped:3, considered:3`) and 07-26 07:04:30 (`sent:1, skipped:2,
+      considered:3`) UTC (cron `0 7 * * *`) - covers F10 AC2/AC3 (sends only when there is content,
+      skips opted-out/empty users). COMPLETE 2026-07-26 (Roi's call). Recorded for honesty: the
+      post-wipe leak-test RERUN was not executed (it deletes data). Wipe isolation rests on static
+      verification instead - `account/wipe` deletes only via
+      `deleteMany({ owner_email: user.email })`, with the email taken from the token server-side
+      (never the request body) and gated behind `confirm: true`, so other users' rows are
+      structurally unreachable; RLS isolation itself is proven live in stages 1 and 2.
+- [x] Stage 7: Assistant agent + WhatsApp - DONE 2026-07-27. All three ACs verified on the live
+      app: AC1 answered in the real chat UI (item question -> right order, status, ETA) plus a
+      reproducible exec smoke; **AC2 isolation gate PASSED** (non-admin account B: unfiltered
+      `read_Order` returned only its own row, user-scoped memory stayed empty), so entity tools
+      were kept and the function-tools-only fallback was never needed; AC3 WhatsApp round trip
+      confirmed on a real phone by Roi. WhatsApp needed no dashboard enable and hit no agent cap
+      (the "Connect" button is an end-user deep link, not an admin toggle), but the in-app
+      affordances are still flag-gated so they can never dead-end. 375px pass done on Roi's phone
 - [ ] Stage 8: Ship (MILESTONE 2: submitted)
+
+## OPEN BUGS (must fix before submission)
+
+- [x] **Duplicate orders shown on the dashboard** (reported by Roi 2026-07-26, FIXED + cleaned
+      2026-07-28). Root cause was candidate 2 (real data, survives reload), with live-data proof:
+      Gmail lists newest-first, so the number-less delivery/carrier notice of a thread created a
+      sparse Order first, and the richer confirmation seconds later failed every merge rung
+      (Salomon: fuzzy window anchored on the sparse row's `created_date` = sync day, 59d outside
+      the 45d window, arbitration never ran; Amazon + LaPelota: arbitration saw an all-"unknown"
+      candidate summary and the prompt said "when in doubt, answer false"; the FedEx card:
+      carrier email became merchant fedex.com, which can never domain-match the real merchant).
+      FIX (all deployed 2026-07-28): sync pages process oldest-first; fuzzy anchor now
+      `ordered_at ?? last_event_at ?? created_date`, candidates sorted best-first, differing
+      explicit order numbers hard-excluded; carrier/missing domains widen the search on both
+      sides (`isCarrierDomain`); arbitration got full-fidelity summaries (subject + snippet +
+      tracking numbers, full-row RunCache) and a rewritten prompt (missing data is not evidence
+      of difference; same-merchant leans merge, cross-merchant needs positive evidence);
+      matched-branch now repairs `ordered_at`/`merchant_name`/carrier `merchant_domain`;
+      `orders/manualAdd` tracking mode dedupes by tracking number. Existing rows merged by
+      `scripts/dedupe-orders.ts` (10 -> 7 orders, 3 pairs, idempotent re-run = 0). VERIFIED live:
+      dashboard shows 7 unique cards, Overdue 2 -> 0, LaPelota delivered with full product data;
+      manualAdd probes: confirmation + sparse delivery paste merged into ONE order, tracking-mode
+      re-add returned `already_exists`, merchant-less carrier paste attached by tracking. 91 unit
+      tests green (`deno test tests/ scripts/tests/`). NOTE: the two-account agent leak test was
+      NOT rerun (scripts/.env.leaktest with account B credentials is absent on this machine);
+      isolation surfaces untouched (all candidate fetches stay owner-scoped), but rerun it before
+      submission when the env file is restored.
 
 ## Architectural decisions (the chosen shape)
 
@@ -332,50 +376,74 @@ invoke error path shows a toast with the server's reason message (force one).
 
 ## Stage 5: Dashboard + timeline + onboarding (MILESTONE 1: daily usable)
 
-- [ ] Dashboard: stats row, filter tabs, card grid (image, logo, status chip, progress bar with
+- [x] Dashboard: stats row, filter tabs, card grid (image, logo, status chip, progress bar with
       today marker, countdown, refund badge), delivered section collapsed, ETA sort.
-- [ ] Realtime: subscribe to Order + TrackingEvent; live card updates + toasts.
-- [ ] Order detail: header, shipment blocks (copy tracking number, carrier deep link), timeline
+- [x] Realtime: subscribe to Order + TrackingEvent; live card updates + toasts.
+- [x] Order detail: header, shipment blocks (copy tracking number, carrier deep link), timeline
       with source snippets, archive / mark-delivered via `orders/setStatus`.
-- [ ] Onboarding screen: "Connect Gmail" (read-only, one click) + paste-an-email as the equal
+- [x] Onboarding screen: "Connect Gmail" (read-only, one click) + paste-an-email as the equal
       second path. The Gmail-filter walkthrough and `inbox/confirmForwarding` assist are RETIRED
       (no forwarding in the per-user model); the function is deleted.
-- [ ] `orders/manualAdd` (paste email text OR tracking number) + UI.
-- [ ] Activity feed (latest events, newest first).
+- [x] `orders/manualAdd` (paste email text OR tracking number) + UI.
+- [x] Activity feed (latest events, newest first).
 
 **DoD:** PRD F3 AC 1-3, F4 AC 1-3, F6 AC 1-2 (two-window realtime + two-account RLS-over-realtime),
 F8 AC 1-2, F9 AC 1-3; narrow-viewport pass on every screen; **connect Gmail -> real order cards
 appear** (the demo moment, replacing "forward-an-email" with the pivot; the connect + first-sync
 half is already verified live in stage 2, so what remains here is the authenticated click-through,
 the two-window realtime test, and the 375px pass on inner screens).
+**MET 2026-07-26** - the connect -> real-cards demo moment and RLS-over-realtime were verified in
+stages 2 and 1 respectively; Roi verified the remaining three live items (authenticated
+click-through, two-window realtime, 375px inner screens) in a browser session on the deployed app.
 
 ---
 
 ## Stage 6: Refund radar + digest
 
-- [ ] `refunds/scan`: overdue detection, policy matching, upsert (unique order+policy, skip
+- [x] `refunds/scan`: overdue detection, policy matching, upsert (unique order+policy, skip
       dismissed), claim drafting; cron `0 3 * * *`; manual trigger path for testing.
-- [ ] `refunds/updateStatus` (dismiss/claimed/recovered) + Refunds screen (countdowns, copy claim,
+- [x] `refunds/updateStatus` (dismiss/claimed/recovered) + Refunds screen (countdowns, copy claim,
       claim link) + card badges + stats-row sum.
-- [ ] `digest/send`: per-user opt-in digest, `Core.SendEmail`, cron `0 7 * * *`; `settings/update`
+- [x] `digest/send`: per-user opt-in digest, `Core.SendEmail`, cron `0 7 * * *`; `settings/update`
       function; Settings screen (digest toggle + hour, address, wipe with confirm).
-- [ ] `account/wipe` full implementation (all per-user entities).
-- [ ] Test fixture: `scripts/force-overdue.ts` backdates a demo order's promised_date.
+- [x] `account/wipe` full implementation (all per-user entities).
+- [x] Test fixture: `scripts/force-overdue.ts` backdates a demo order's promised_date.
+- [~] Wipe leak-test rerun: NOT RUN (it deletes data); waived 2026-07-26 by Roi's call. Covered
+      instead by static verification of `account/wipe` (deletes scoped to
+      `deleteMany({ owner_email: user.email })`, email from the token, `confirm: true` required).
+      To close it properly later: invoke `account/wipe` as account B, then assert account A's rows
+      are untouched (A held 10 real imported orders as of 2026-07-26; the earlier "36" predates the
+      product_kind relevance filtering that excluded SaaS/food-delivery/flight receipts).
 
 **DoD:** PRD F5 AC 1-4 and F10 AC 1-3 pass on deployed app (cron verified by manual trigger + one
 real scheduled run in logs); wipe leaves a second account's data untouched (leak-test rerun).
+**Cron half MET 2026-07-26** (`base44 logs --env preview`, two consecutive real scheduled runs each:
+`refunds/scan` 07-25 03:03:37 + 07-26 03:04:56 UTC, `created:0 skippedExisting:16`; `digest/send`
+07-25 07:02:16 `sent:0` + 07-26 07:04:30 `sent:1 skipped:2` UTC). Wipe rerun still open.
 
 ---
 
 ## Stage 7: Assistant agent + WhatsApp
 
-- [ ] `base44/agents/itrack_assistant.jsonc` (PRD section 9); `base44 agents push`.
-- [ ] In-app chat button + conversation UI (SDK agents module); WhatsApp connect button via
-      `getWhatsAppConnectURL`.
-- [ ] Roi (manual): check the 3-agent WhatsApp limit across his apps; enable WhatsApp for
-      `itrack_assistant` in the dashboard.
-- [ ] **Isolation gate (PRD F7 AC2 / risk #5):** two-account test through the agent. If entity
-      tools leak, switch to function-tools-only and log to FEEDBACK.md.
+- [x] `base44/agents/itrack_assistant.jsonc` (PRD section 9); `base44 agents push` (2026-07-27:
+      re-pushed, so remote provably equals the committed jsonc; confirmed in the dashboard by the
+      Welcome Message length matching `whatsapp_greeting`. There is no `agents list`/`pull` to read
+      remote state back, so a re-push is the only way to be sure: FEEDBACK).
+- [x] In-app chat button + conversation UI (SDK agents module); WhatsApp connect button via
+      `getWhatsAppConnectURL`, gated behind `WHATSAPP_ENABLED` in `src/lib/config.js` plus a
+      Settings card (PRD section 10 screen 6). The flag exists because `getWhatsAppConnectURL` is a
+      synchronous string builder that returns a URL whether or not the channel works, so the old
+      try/catch around it was dead code and the icon was a live dead link.
+- [x] Roi (manual): WhatsApp for `itrack_assistant`. Outcome 2026-07-27: **there was nothing to
+      enable.** The dashboard's green "Connect" button is not an admin toggle, it opens the same
+      end-user deep link the SDK builds, and no 3-agent cap surfaced anywhere in the UI (FEEDBACK).
+      The channel is live: the deployed Settings button lands on `api.whatsapp.com/send/` with a
+      real number and a prefilled activation code, and the route survives an `agents push`.
+- [x] **Isolation gate (PRD F7 AC2 / risk #5):** `scripts/agent-leak-test.mjs` as non-admin B,
+      exit 0 (2026-07-27). Entity tools did NOT leak, so no fallback to function-tools-only was
+      needed: the agent ran an unfiltered `read_Order` and got exactly its own 1 row while A owned
+      11, and B's memory probe came back empty right after A saved a memory. Seed and cleanup are
+      `scripts/agent-leak-seed.ts` / `agent-leak-cleanup.ts`; `scripts/agent-smoke.ts` covers AC1.
 
 **DoD:** "where's my [item]?" answered correctly in-app for the demo account; second account gets
 only its own data; WhatsApp round-trip on a real phone.

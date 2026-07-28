@@ -12,9 +12,16 @@
 // - Statuses are monotonic; this module is their single writer.
 // - EmailRecord.snippet <= 2000 chars, never the full body.
 
-import { extractImageCandidates, htmlToText, truncateForLLM } from "./htmlToText.ts";
-import { analyzeEmail, arbitrateSameOrder, type ExtractionResult } from "./extract.ts";
+import { extractImageCandidates, extractLinkCandidates, htmlToText, truncateForLLM } from "./htmlToText.ts";
 import {
+  analyzeEmail,
+  arbitrateSameOrder,
+  canCreateOrder,
+  type ExtractionResult,
+  isTrackablePurchase,
+} from "./extract.ts";
+import {
+  buildIdentityPatch,
   computeStatus,
   decideMerge,
   EVENT_TYPE_TO_RANK,
@@ -23,9 +30,9 @@ import {
   type StatusSignal,
 } from "./mergeEngine.ts";
 import { resolveCarrier } from "./carriers.ts";
-import { rehostImage } from "./rehost.ts";
+import { rehostImageMeasured } from "./rehost.ts";
 import { resolveAndRehostLogo } from "./merchantLogo.ts";
-import { domainFromSender } from "./senderDomain.ts";
+import { domainFromSender, isCarrierDomain } from "./senderDomain.ts";
 import { getMessage } from "./gmail.ts";
 
 // deno-lint-ignore no-explicit-any
@@ -34,12 +41,19 @@ type Base44Client = any;
 const SNIPPET_MAX = 1990;
 const MAX_REHOSTED_IMAGES = 3;
 const LOW_CONFIDENCE = 0.6;
+// Arbitration budget per email (each is one InvokeLLM call inside a loop that
+// already spends one on extraction).
+const MAX_ARBITRATIONS = 3;
+const MAX_CROSS_MERCHANT_ARBITRATIONS = 1;
 
 interface OrderItem {
   name?: string;
   qty?: number;
   price?: number;
   image_url?: string;
+  image_width?: number;
+  image_source?: string;
+  product_url?: string;
 }
 
 // Fill gaps in an existing item list from a later, richer email. Deliberately
@@ -57,8 +71,20 @@ export function mergeItems(
     const inc = byName.get(key(e.name));
     if (!inc) return e;
     const next = { ...e };
-    if (!e.image_url && inc.image_url) {
+    // A photo from the merchant's own email outranks anything enrichment found
+    // on the web (a web result is regularly the wrong colourway or a series
+    // shot), so a later email may overwrite a product_page/search image as well
+    // as fill a blank. It never overwrites another email image.
+    const webSourced = e.image_source === "product_page" || e.image_source === "search";
+    const incomingIsEmail = inc.image_source === "email";
+    if (inc.image_url && (!e.image_url || (webSourced && incomingIsEmail))) {
       next.image_url = inc.image_url;
+      next.image_width = inc.image_width;
+      next.image_source = inc.image_source;
+      changed = true;
+    }
+    if (!e.product_url && inc.product_url) {
+      next.product_url = inc.product_url;
       changed = true;
     }
     if (e.price == null && inc.price != null) {
@@ -79,6 +105,10 @@ export interface PipelineResult {
   emailRecordId?: string;
   orderId?: string;
   detail?: string;
+  // "excluded_kind": a real order, but not a physical parcel (food/grocery,
+  // SaaS/digital, booking). Lets manual add explain the policy instead of
+  // claiming the text is not an order email.
+  reason?: "excluded_kind";
 }
 
 export interface CoreInput {
@@ -101,21 +131,25 @@ export interface CoreInput {
 // and shipments created earlier in the run are immediately visible as merge
 // candidates, independent of read-after-write lag. Manual add passes none.
 export interface RunCache {
-  orders: Array<{
-    id: string;
-    merchant_domain?: string | null;
-    order_number?: string | null;
-    merchant_name?: string | null;
-    ordered_at?: string | null;
-    created_date?: string;
-  }>;
-  shipments: Array<{ id: string; order_id: string; tracking_number?: string | null }>;
+  // FULL Order rows created (or patched) this run, not a slim projection.
+  // Fidelity matters: these rows feed the arbitration candidate summaries and
+  // the matched-order patch branch, so a projection that dropped items/total
+  // would make a same-run candidate read as a sparse order and re-create the
+  // exact duplicates this cache exists to prevent.
+  orders: Array<{ id: string } & Record<string, unknown>>;
+  shipments: Array<{ id: string; order_id: string; tracking_number?: string | null; carrier?: string | null }>;
 }
 
-function unionById<T extends { id: string }>(dbRows: T[], cacheRows: T[] = []): T[] {
+// Cache rows are this run's own writes (kept current via mirroring after each
+// Order.update), strictly fresher than a possibly-lagging DB read, so on an id
+// collision the cache row wins.
+export function unionById<T extends { id: string }>(dbRows: T[], cacheRows: T[] = []): T[] {
   if (cacheRows.length === 0) return dbRows;
-  const seen = new Set(dbRows.map((r) => r.id));
-  return dbRows.concat(cacheRows.filter((r) => !seen.has(r.id)) as unknown as T[]);
+  const cacheById = new Map(cacheRows.map((r) => [r.id, r]));
+  const dbIds = new Set(dbRows.map((r) => r.id));
+  return dbRows
+    .map((r) => cacheById.get(r.id) ?? r)
+    .concat(cacheRows.filter((r) => !dbIds.has(r.id)) as unknown as T[]);
 }
 
 function snippetOf(text: string): string {
@@ -151,21 +185,84 @@ function signalsFromEvents(events: Array<{ type: string; occurred_at: string }>)
   }));
 }
 
-function orderSummaryFor(o: {
-  merchant_name?: string;
-  order_number?: string | null;
-  total?: number | null;
-  currency?: string | null;
-  ordered_at?: string | null;
-  items?: Array<{ name: string }> | null;
-}): string {
+// Arbitration summaries. Everything the email/order actually knows goes in;
+// absent values render as "unknown" and the arbitration prompt instructs the
+// model to read those as missing data, not as a difference.
+function incomingSummaryFor(
+  extraction: ExtractionResult,
+  input: CoreInput,
+  occurredAt: string,
+  snippet: string,
+): string {
   return [
-    `merchant: ${o.merchant_name ?? "?"}`,
-    `order number: ${o.order_number ?? "unknown"}`,
-    `total: ${o.total ?? "?"} ${o.currency ?? ""}`,
-    `ordered at: ${o.ordered_at ?? "?"}`,
-    `items: ${(o.items ?? []).map((i) => i.name).join("; ") || "?"}`,
+    `merchant: ${extraction.merchant_name ?? "unknown"}`,
+    `order number: ${extraction.order_number ?? "unknown"}`,
+    `total: ${extraction.total ?? "unknown"} ${extraction.currency ?? ""}`.trimEnd(),
+    `items: ${(extraction.items ?? []).map((i) => i.name).join("; ") || "unknown"}`,
+    `email type: ${extraction.classification}`,
+    `event date: ${occurredAt}`,
+    `tracking number: ${extraction.tracking_number ?? "unknown"}`,
+    `carrier: ${extraction.carrier ?? "unknown"}`,
+    `subject: ${input.subject || "unknown"}`,
+    `email excerpt: ${snippet.slice(0, 400) || "unknown"}`,
   ].join("\n");
+}
+
+function candidateSummaryFor(
+  o: {
+    id: string;
+    merchant_name?: string | null;
+    order_number?: string | null;
+    total?: number | null;
+    currency?: string | null;
+    ordered_at?: string | null;
+    status?: string | null;
+    last_event_at?: string | null;
+    items?: Array<{ name: string }> | null;
+  },
+  shipments: Array<{ order_id: string; tracking_number?: string | null }>,
+): string {
+  const trackingNumbers = shipments
+    .filter((s) => s.order_id === o.id)
+    .map((s) => s.tracking_number)
+    .filter(Boolean);
+  return [
+    `merchant: ${o.merchant_name ?? "unknown"}`,
+    `order number: ${o.order_number ?? "unknown"}`,
+    `total: ${o.total ?? "unknown"} ${o.currency ?? ""}`.trimEnd(),
+    `ordered at: ${o.ordered_at ?? "unknown"}`,
+    `status: ${o.status ?? "unknown"}`,
+    `last event at: ${o.last_event_at ?? "unknown"}`,
+    `items: ${(o.items ?? []).map((i) => i.name).join("; ") || "unknown"}`,
+    `tracking numbers: ${trackingNumbers.join("; ") || "unknown"}`,
+  ].join("\n");
+}
+
+// Single writer for EmailRecord provenance rows: the pipeline's exit paths
+// differ only in classification / parse_status / linkage.
+async function recordEmail(
+  // deno-lint-ignore no-explicit-any
+  service: any,
+  input: CoreInput,
+  snippet: string,
+  fields: {
+    classification?: string;
+    parse_status: string;
+    confidence?: number;
+    order_id?: string;
+    error?: string;
+  },
+) {
+  return await service.EmailRecord.create({
+    owner_email: input.ownerEmail,
+    gmail_message_id: input.gmailMessageId,
+    thread_id: input.threadId,
+    from_address: input.from,
+    subject: input.subject.slice(0, 490),
+    received_at: input.receivedAt,
+    snippet,
+    ...fields,
+  });
 }
 
 // ---------------------------------------------------------------- gmail path
@@ -224,41 +321,63 @@ export async function runCorePipeline(
   try {
     // 3. Classify + extract (one LLM call).
     const imageCandidates = input.html ? extractImageCandidates(input.html) : [];
+    const linkCandidates = input.html ? extractLinkCandidates(input.html) : [];
     const extraction: ExtractionResult = await analyzeEmail(base44, {
       from: input.from,
       subject: input.subject,
       text: truncateForLLM(plainText),
       imageCandidates,
+      linkCandidates,
       today: input.receivedAt.slice(0, 10),
     });
 
     // 4. Irrelevant mail: record and stop (keeps re-forwards idempotent).
-    if (!extraction.is_order_related || extraction.classification === "irrelevant") {
-      const rec = await service.EmailRecord.create({
-        owner_email: input.ownerEmail,
-        gmail_message_id: input.gmailMessageId,
-        thread_id: input.threadId,
-        from_address: input.from,
-        subject: input.subject.slice(0, 490),
-        received_at: input.receivedAt,
-        classification: "irrelevant",
+    // isTrackablePurchase is the code-level backstop for the classifier's
+    // exclusion rules: the LLM reliably NAMES what was bought (product_kind)
+    // but unreliably folds exclusions into is_order_related, so the
+    // combination happens here. The record keeps the model's true
+    // classification; parse_status carries the drop.
+    if (!extraction.is_order_related || extraction.classification === "irrelevant" || !isTrackablePurchase(extraction)) {
+      const excludedKind = extraction.is_order_related && extraction.classification !== "irrelevant";
+      const rec = await recordEmail(service, input, snippet, {
+        classification: extraction.classification,
         parse_status: "irrelevant",
         confidence: extraction.confidence,
-        snippet,
       });
-      return { status: "irrelevant", emailRecordId: rec.id };
+      return excludedKind
+        ? { status: "irrelevant", emailRecordId: rec.id, reason: "excluded_kind" }
+        : { status: "irrelevant", emailRecordId: rec.id };
     }
 
     const occurredAt = extraction.event_date ?? input.receivedAt;
 
     // 5. Merge into an Order.
     // Include orders/shipments created earlier in THIS run (read-after-write
-    // lag would otherwise hide them and produce duplicates).
-    const myOrders = unionById(await service.Order.filter({ owner_email: input.ownerEmail }), runCache?.orders);
-    const myShipments = unionById(await service.Shipment.filter({ owner_email: input.ownerEmail }), runCache?.shipments);
+    // lag would otherwise hide them and produce duplicates). Reads are
+    // bounded explicitly: a silently truncated candidate list would disable
+    // matching for older orders and mint duplicates.
+    const myOrders = unionById(
+      await service.Order.filter({ owner_email: input.ownerEmail }, "-created_date", 1000),
+      runCache?.orders,
+    );
+    const myShipments = unionById(
+      await service.Shipment.filter({ owner_email: input.ownerEmail }, "-created_date", 1000),
+      runCache?.shipments,
+    );
+    // A missing or carrier merchant_domain never identifies the store, so such
+    // emails widen the fuzzy search to every in-window order instead of
+    // matching nothing (carrier notices are exactly the emails with no other
+    // usable merge key).
+    const widen = !normalizeDomain(extraction.merchant_domain) ||
+      isCarrierDomain(extraction.merchant_domain);
     const fuzzy = fuzzyCandidates(
-      { merchant_domain: extraction.merchant_domain, occurredAt },
+      {
+        merchant_domain: extraction.merchant_domain,
+        order_number: extraction.order_number,
+        occurredAt,
+      },
       myOrders,
+      { widen },
     );
     let decision = decideMerge(
       {
@@ -272,21 +391,45 @@ export async function runCorePipeline(
     );
 
     if (decision.kind === "ambiguous") {
-      // LLM arbitration against the closest candidates (max 2 calls).
+      // LLM arbitration against the best candidates (the list arrives
+      // best-first from fuzzyCandidates). Same-merchant comparisons lean
+      // toward merging; wildcard (carrier/domainless) comparisons demand
+      // positive linking evidence. See buildArbitrationPrompt.
+      //
+      // Budgets: each call is an InvokeLLM round trip inside a per-message
+      // loop, so they are capped. Cross-merchant calls get the tighter budget
+      // because widening can nominate every in-window order and those
+      // comparisons almost never match.
       let matched: string | null = null;
-      const incomingSummary = orderSummaryFor({
-        merchant_name: extraction.merchant_name ?? undefined,
-        order_number: extraction.order_number,
-        total: extraction.total,
-        currency: extraction.currency,
-        ordered_at: occurredAt,
-        items: extraction.items ?? undefined,
-      });
-      for (const candidateId of decision.candidateOrderIds.slice(0, 2)) {
-        const candidate = myOrders.find((o: any) => o.id === candidateId);
+      let crossMerchantCalls = 0;
+      const incomingSummary = incomingSummaryFor(extraction, input, occurredAt, snippet);
+      const incomingDomain = normalizeDomain(extraction.merchant_domain);
+      for (const candidateId of decision.candidateOrderIds.slice(0, MAX_ARBITRATIONS)) {
+        // deno-lint-ignore no-explicit-any
+        const candidate: any = myOrders.find((o: any) => o.id === candidateId);
         if (!candidate) continue;
-        if (await arbitrateSameOrder(base44, incomingSummary, orderSummaryFor(candidate))) {
+        const candidateDomain = normalizeDomain(candidate.merchant_domain);
+        const crossMerchant = !incomingDomain || !candidateDomain ||
+          incomingDomain !== candidateDomain ||
+          isCarrierDomain(incomingDomain) || isCarrierDomain(candidateDomain);
+        if (crossMerchant && crossMerchantCalls >= MAX_CROSS_MERCHANT_ARBITRATIONS) continue;
+        if (crossMerchant) crossMerchantCalls++;
+        const same = await arbitrateSameOrder(base44, {
+          incoming: incomingSummary,
+          existing: candidateSummaryFor(candidate, myShipments),
+          crossMerchant,
+        });
+        if (same) {
           matched = candidateId;
+          // Cross-merchant merges rest on the LLM alone (no hard key agreed),
+          // so they are logged: this is the line to grep when an over-merge is
+          // suspected on the live app.
+          if (crossMerchant) {
+            console.log(
+              `arbitration cross-merchant merge: msg=${input.gmailMessageId} order=${candidateId} ` +
+                `incoming_domain=${incomingDomain || "none"} candidate_domain=${candidateDomain || "none"}`,
+            );
+          }
           break;
         }
       }
@@ -295,20 +438,37 @@ export async function runCorePipeline(
         : { kind: "new_order" };
     }
 
-    // Re-host item images (bounded) before writing items.
-    const items = [];
+    // Weak classifications (review nags, tips, refund notes, misc) may only
+    // ATTACH to an order that already exists; they never open a card. A flight
+    // "confirmation" tagged other_order_related stops here, not on the board.
+    if (decision.kind === "new_order" && !canCreateOrder(extraction.classification)) {
+      const rec = await recordEmail(service, input, snippet, {
+        classification: extraction.classification,
+        parse_status: "unroutable",
+        confidence: extraction.confidence,
+      });
+      return { status: "unroutable", emailRecordId: rec.id };
+    }
+
+    // Re-host item images (bounded) before writing items. product_url is stored
+    // for EVERY item regardless of the rehost cap (it is just a string); the
+    // heavy HQ upgrade via that link happens later in orders/enrichProductImages.
+    const items: OrderItem[] = [];
     let rehostedCount = 0;
     for (const item of extraction.items ?? []) {
-      let imageUrl: string | null = null;
+      let rehosted = null;
       if (item.image_url && rehostedCount < MAX_REHOSTED_IMAGES) {
-        imageUrl = await rehostImage(base44, item.image_url);
-        if (imageUrl) rehostedCount++;
+        rehosted = await rehostImageMeasured(base44, item.image_url);
+        if (rehosted) rehostedCount++;
       }
       items.push({
         name: item.name,
         qty: item.qty ?? 1,
         price: item.price ?? undefined,
-        image_url: imageUrl ?? undefined,
+        image_url: rehosted?.url ?? undefined,
+        image_width: rehosted?.width || undefined,
+        image_source: rehosted ? "email" : undefined,
+        product_url: item.product_url ?? undefined,
       });
     }
 
@@ -322,12 +482,17 @@ export async function runCorePipeline(
       orderId = decision.orderId;
       // deno-lint-ignore no-explicit-any
       const order: any = myOrders.find((o: any) => o.id === orderId)!;
-      // Fill gaps; never blank existing values with nulls.
-      const patch: Record<string, unknown> = {};
-      if (!order.order_number && extraction.order_number) patch.order_number = extraction.order_number;
-      if (!order.merchant_domain && extraction.merchant_domain) {
-        patch.merchant_domain = normalizeDomain(extraction.merchant_domain);
-      }
+      // Fill gaps; never blank existing values with nulls. Identity fields
+      // (order number, domain, ordered_at, merchant name) follow the repair
+      // rules in buildIdentityPatch; everything below is simple gap-filling.
+      const patch: Record<string, unknown> = {
+        ...buildIdentityPatch(order, {
+          merchant_name: extraction.merchant_name,
+          merchant_domain: extraction.merchant_domain,
+          order_number: extraction.order_number,
+          classification: extraction.classification,
+        }, occurredAt),
+      };
       if (extraction.promised_date) patch.promised_date = extraction.promised_date;
       if (extraction.eta_date) patch.eta_date = extraction.eta_date;
       if (order.total == null && extraction.total != null) patch.total = extraction.total;
@@ -354,12 +519,22 @@ export async function runCorePipeline(
         }
         patch.logo_checked_at = new Date().toISOString();
       }
-      if (Object.keys(patch).length > 0) await service.Order.update(orderId, patch);
+      if (Object.keys(patch).length > 0) {
+        await service.Order.update(orderId, patch);
+        // Keep the run cache current so later emails in this run see the
+        // patched identity despite entity read-after-write lag. Orders that
+        // existed BEFORE this run are not in the cache yet, so they are added
+        // here: without this, a second email in the same run re-reads the
+        // stale pre-patch row and can fail to match it.
+        const cachedOrder = runCache?.orders.find((o) => o.id === orderId);
+        if (cachedOrder) Object.assign(cachedOrder, patch);
+        else runCache?.orders.push({ ...order, ...patch, id: orderId });
+      }
     } else {
       const domain = normalizeDomain(extraction.merchant_domain) || undefined;
       const logoDomain = domain || senderDomain || "";
       const resolved = logoDomain ? await resolveAndRehostLogo(base44, logoDomain) : null;
-      const created = await service.Order.create({
+      const orderPayload = {
         owner_email: input.ownerEmail,
         merchant_name: extraction.merchant_name ?? "Unknown merchant",
         merchant_domain: domain,
@@ -377,13 +552,17 @@ export async function runCorePipeline(
         eta_date: extraction.eta_date ?? undefined,
         items,
         confidence: extraction.confidence,
-      });
+      };
+      const created = await service.Order.create(orderPayload);
       orderId = created.id;
+      // Cache the FULL row (payload fields plus whatever the create echoed):
+      // later emails in this run summarize, arbitrate, and patch against it.
       runCache?.orders.push({
+        ...orderPayload,
+        ...created,
         id: created.id,
         merchant_domain: domain ?? null,
         order_number: extraction.order_number ?? null,
-        merchant_name: extraction.merchant_name ?? null,
         ordered_at: extraction.classification === "order_confirmation" ? occurredAt : null,
         created_date: created.created_date ?? input.receivedAt,
       });
@@ -423,18 +602,10 @@ export async function runCorePipeline(
     }
 
     // 7. EmailRecord (before the event so provenance links resolve).
-    const parseStatus = extraction.confidence < LOW_CONFIDENCE ? "low_confidence" : "parsed";
-    const emailRecord = await service.EmailRecord.create({
-      owner_email: input.ownerEmail,
-      gmail_message_id: input.gmailMessageId,
-      thread_id: input.threadId,
-      from_address: input.from,
-      subject: input.subject.slice(0, 490),
-      received_at: input.receivedAt,
+    const emailRecord = await recordEmail(service, input, snippet, {
       classification: extraction.classification,
-      parse_status: parseStatus,
+      parse_status: extraction.confidence < LOW_CONFIDENCE ? "low_confidence" : "parsed",
       confidence: extraction.confidence,
-      snippet,
       order_id: orderId,
     });
 
@@ -466,7 +637,7 @@ export async function runCorePipeline(
 
     // 9. Recompute the order status from the FULL event history (single
     // writer, monotonic by construction) + shipment status for this shipment.
-    const allEvents = await service.TrackingEvent.filter({ order_id: orderId });
+    const allEvents = await service.TrackingEvent.filter({ order_id: orderId }, "-occurred_at", 1000);
     const signals = signalsFromEvents(allEvents);
     if (extraction.status_suggestion) {
       // Belt and braces: the suggestion itself is a signal too.
@@ -483,10 +654,26 @@ export async function runCorePipeline(
       });
     }
     const newStatus = computeStatus(signals);
+    // last_event_at is forward-only (the dashboard sorts on it): with pages
+    // processed oldest-first this is a no-op, but an older email merging into
+    // an existing order later must not rewind it. ISO UTC strings compare
+    // lexicographically.
+    // deno-lint-ignore no-explicit-any
+    const priorOrder: any = myOrders.find((o: any) => o.id === orderId);
+    const prevLast: string | undefined = priorOrder?.last_event_at;
+    const lastEventAt = prevLast && prevLast > occurredAt ? prevLast : occurredAt;
     await service.Order.update(orderId, {
       status: newStatus,
-      last_event_at: occurredAt,
+      last_event_at: lastEventAt,
     });
+    // Invariant: after an email is processed, its order is in the run cache
+    // with current values, so the next email of this run never re-reads a
+    // stale row through read-after-write lag.
+    const cacheRow = runCache?.orders.find((o) => o.id === orderId);
+    if (cacheRow) Object.assign(cacheRow, { status: newStatus, last_event_at: lastEventAt });
+    else if (priorOrder) {
+      runCache?.orders.push({ ...priorOrder, id: orderId, status: newStatus, last_event_at: lastEventAt });
+    }
     if (shipmentId) {
       const shipmentEvents = allEvents.filter((e: any) => e.shipment_id === shipmentId);
       const shipmentStatus = computeStatus([
@@ -500,15 +687,8 @@ export async function runCorePipeline(
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     try {
-      const rec = await service.EmailRecord.create({
-        owner_email: input.ownerEmail,
-        gmail_message_id: input.gmailMessageId,
-        thread_id: input.threadId,
-        from_address: input.from,
-        subject: input.subject.slice(0, 490),
-        received_at: input.receivedAt,
+      const rec = await recordEmail(service, input, snippet, {
         parse_status: "failed",
-        snippet,
         error: detail.slice(0, 900),
       });
       return { status: "failed", emailRecordId: rec.id, detail };
