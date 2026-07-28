@@ -22,6 +22,7 @@
       "description": "Escalation stage computed from days_late; drives copy, routes, and draft recipient"
     },
     "days_late":       { "type": "integer", "description": "Recomputed every scan" },
+    "delivered_at":    { "type": "string", "format": "date", "description": "When the parcel actually arrived, from the delivered TrackingEvent (delivered_late only). Carried here so consumers never fall back to Order.last_event_at, which is the last event of ANY type" },
     "amount_estimate": { "type": "number", "description": "Only set when amount_basis is order_total or shipping_fee" },
     "currency":        { "type": "string", "description": "Copied from the order so consumers never guess" },
     "amount_basis": {

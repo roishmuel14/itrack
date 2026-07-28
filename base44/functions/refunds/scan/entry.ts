@@ -55,56 +55,97 @@ Deno.serve(async (req) => {
     const merchantPolicies = policies.filter((p: any) => p.merchant_domain);
     const railPolicies = policies.filter((p: any) => p.payment_rail);
 
-    const orders = await service.Order.filter({ is_archived: false }, undefined, 5000);
+    const ORDER_LIMIT = 5000;
+    const OPPORTUNITY_LIMIT = 5000;
+    const orders = await service.Order.filter({ is_archived: false }, undefined, ORDER_LIMIT);
     const relevant = orders.filter(
       (o: any) => o.promised_date && (ACTIVE_STATUSES.includes(o.status) || o.status === "delivered"),
     );
 
-    const existing = await service.RefundOpportunity.list(undefined, 5000);
+    // Delivery dates come from the `delivered` TrackingEvent, never from
+    // Order.last_event_at: that field is the latest event of ANY type, so a
+    // seller message or refund note arriving after delivery drags it forward
+    // (and a manual add sets it to ingest time), which would overstate how
+    // late the parcel actually arrived. Earliest delivered event wins: that
+    // is when it landed, a later re-scan is not a second delivery.
+    const deliveredEvents = await service.TrackingEvent.filter({ type: "delivered" }, "-occurred_at", 5000);
+    const deliveredAtByOrder = new Map<string, string>();
+    for (const e of deliveredEvents) {
+      const prev = deliveredAtByOrder.get(e.order_id);
+      if (!prev || e.occurred_at < prev) deliveredAtByOrder.set(e.order_id, e.occurred_at);
+    }
+
+    const existing = await service.RefundOpportunity.list(undefined, OPPORTUNITY_LIMIT);
     const existingByKey = new Map(existing.map((r: any) => [`${r.owner_email}::${r.order_id}`, r]));
 
     let created = 0;
     let updated = 0;
+    let retired = 0;
     let skippedDismissed = 0;
     let drafts = 0;
 
-    for (const order of relevant) {
+    // Does this order warrant a case right now, and on what evidence?
+    // Returns null when it does not, so the caller can RETIRE a stale case
+    // instead of skipping past it: an order that arrives, or whose promised
+    // date is revised forward, must not leave behind a card still asserting
+    // "N days late, still not delivered".
+    const qualify = (order: any) => {
       const delivered = order.status === "delivered";
-      const anchorDate = delivered ? (order.last_event_at ?? "").slice(0, 10) : today;
-      if (delivered && !anchorDate) continue; // no delivery date to measure lateness from
+      const deliveredAt = delivered
+        ? String(deliveredAtByOrder.get(order.id) ?? order.last_event_at ?? "")
+        : "";
+      if (delivered && !deliveredAt) return null; // no delivery date to measure against
+      const anchorDate = delivered ? deliveredAt.slice(0, 10) : today;
 
       const daysLate = daysBetween(order.promised_date, anchorDate);
-      if (daysLate < 1) continue;
-
-      let stage: "late" | "likely_lost" | "dispute" | "delivered_late";
-      let merchantMatches: any[];
-      let railMatches: any[] = [];
+      if (daysLate < 1) return null;
 
       if (delivered) {
-        stage = "delivered_late";
-        merchantMatches = merchantPolicies.filter(
+        const merchantMatches = merchantPolicies.filter(
           (p: any) => p.applies_when_delivered && policyDomainMatches(order.merchant_domain, p.merchant_domain),
         );
-        if (merchantMatches.length === 0) continue; // nothing to claim on an arrived parcel otherwise
-      } else {
-        stage = daysLate >= 30 ? "dispute" : daysLate >= 14 ? "likely_lost" : "late";
-        merchantMatches = merchantPolicies.filter(
-          (p: any) => !p.applies_when_delivered && policyDomainMatches(order.merchant_domain, p.merchant_domain),
-        );
-        railMatches = order.payment_method
-          ? railPolicies.filter((p: any) => p.payment_rail === order.payment_method)
-          : [];
-
-        const entitled = merchantMatches.some((p: any) => daysLate >= (p.min_days_late ?? 1));
-        if (!entitled && daysLate < FRESH_LATE_GRACE_DAYS && stage === "late") continue;
+        // Nothing to claim on a parcel that already arrived.
+        if (merchantMatches.length === 0) return null;
+        return { delivered, stage: "delivered_late" as const, daysLate, anchorDate, merchantMatches, railMatches: [] as any[] };
       }
 
+      const stage = daysLate >= 30 ? ("dispute" as const) : daysLate >= 14 ? ("likely_lost" as const) : ("late" as const);
+      const merchantMatches = merchantPolicies.filter(
+        (p: any) => !p.applies_when_delivered && policyDomainMatches(order.merchant_domain, p.merchant_domain),
+      );
+      const railMatches = order.payment_method
+        ? railPolicies.filter((p: any) => p.payment_rail === order.payment_method)
+        : [];
+      const entitled = merchantMatches.some((p: any) => daysLate >= (p.min_days_late ?? 1));
+      if (!entitled && daysLate < FRESH_LATE_GRACE_DAYS && stage === "late") return null;
+      return { delivered, stage, daysLate, anchorDate, merchantMatches, railMatches };
+    };
+
+    // A case the user has acted on is their record; only auto-generated rows
+    // they have not touched are ever retired.
+    const isRetirable = (row: any) => ["detected", "notified"].includes(row.status);
+
+    const visitedKeys = new Set<string>();
+
+    for (const order of relevant) {
       const key = `${order.owner_email}::${order.id}`;
+      visitedKeys.add(key);
       const existingRow = existingByKey.get(key);
+
       if (existingRow && existingRow.status === "dismissed") {
         skippedDismissed++;
         continue; // dismissed stays dismissed even if it escalates (F5 AC3)
       }
+
+      const q = qualify(order);
+      if (!q) {
+        if (existingRow && isRetirable(existingRow)) {
+          await service.RefundOpportunity.delete(existingRow.id);
+          retired++;
+        }
+        continue;
+      }
+      const { delivered, stage, daysLate, anchorDate, merchantMatches, railMatches } = q;
 
       // Routes: merchant_contact always first (never a claim, just an update
       // request), then evidenced merchant-policy routes, then evidenced
@@ -177,6 +218,7 @@ Deno.serve(async (req) => {
         type: oppType,
         stage,
         days_late: daysLate,
+        delivered_at: delivered ? anchorDate : undefined,
         amount_estimate: amountEstimate,
         currency: order.currency ?? "USD",
         amount_basis: remedy,
@@ -187,9 +229,18 @@ Deno.serve(async (req) => {
       };
 
       const wasOpen = !existingRow || ["detected", "notified"].includes(existingRow.status);
-      const stageChanged = !existingRow || existingRow.draft_stage !== stage;
+      // Regenerate when the stage OR the party the draft must be addressed to
+      // changed. Recipient can flip while the stage holds constant: adding a
+      // payment method unlocks a dispute route at, say, an unchanged `dispute`
+      // stage, and a merchant-addressed draft would then sit under a
+      // "addressed to your payment provider" label. A missing draft (an
+      // earlier LLM failure) is also retried.
+      const draftStale = !existingRow ||
+        existingRow.draft_stage !== stage ||
+        existingRow.draft_recipient !== recipient ||
+        !existingRow.draft_message;
       let draftPatch: Record<string, unknown> = {};
-      if (wasOpen && stageChanged && drafts < MAX_DRAFTS_PER_RUN) {
+      if (wasOpen && draftStale && drafts < MAX_DRAFTS_PER_RUN) {
         try {
           const remedyDescription = bestAvailable
             ? (bestPolicy?.description ?? "")
@@ -231,7 +282,31 @@ Deno.serve(async (req) => {
       }
     }
 
-    const summary = { ok: true, late_orders: relevant.length, created, updated, skippedDismissed, drafts };
+    // Sweep: an open case whose order was not even a candidate this run is
+    // stale in exactly the same way as one the loop retired - the order was
+    // archived, cancelled/returned, lost its promised_date, or was deleted.
+    // Guarded on truncation: if either read hit its cap, "not seen this run"
+    // could just mean "past the limit", and deleting on that basis would
+    // destroy live cases. Skip the sweep and say so rather than guess.
+    const ordersTruncated = orders.length >= ORDER_LIMIT;
+    const opportunitiesTruncated = existing.length >= OPPORTUNITY_LIMIT;
+    let sweepSkipped = false;
+    if (ordersTruncated || opportunitiesTruncated) {
+      sweepSkipped = true;
+      console.log(
+        `refunds/scan: SWEEP SKIPPED - reads hit their cap (orders=${orders.length}/${ORDER_LIMIT}, ` +
+          `opportunities=${existing.length}/${OPPORTUNITY_LIMIT}); raise the limits or page these reads.`,
+      );
+    } else {
+      for (const row of existing) {
+        const key = `${row.owner_email}::${row.order_id}`;
+        if (visitedKeys.has(key) || !isRetirable(row)) continue;
+        await service.RefundOpportunity.delete(row.id);
+        retired++;
+      }
+    }
+
+    const summary = { ok: true, late_orders: relevant.length, created, updated, retired, skippedDismissed, drafts, sweepSkipped };
     console.log("refunds/scan:", JSON.stringify(summary));
     return Response.json(summary);
   } catch (err) {

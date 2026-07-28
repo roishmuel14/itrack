@@ -185,6 +185,32 @@ in FEEDBACK.md.
       verified in a live authenticated session (no credential-entry path was available this
       session); Roi should spot-check the Refunds page, Dashboard tile, and OrderDetail payment
       picker before submission.
+      **REVIEW FOLLOW-UP 2026-07-28 (PR #15 review, 3 defects found and fixed):** (1) the scan only
+      ever created/updated and never RECONCILED, so a case whose order later arrived (or whose
+      `promised_date` was revised forward, or that was archived/cancelled) was left open still
+      asserting "N days late, still not delivered" - every disqualifying path was a bare `continue`
+      before the existing-row lookup. Now `qualify()` returns null and the caller RETIRES the row,
+      plus an end-of-run sweep catches cases whose order left the candidate set entirely; only
+      user-untouched rows (`detected`/`notified`) are ever retired, so dismissed/claimed/recovered
+      stay as the user's record, and the sweep is skipped with a loud log if either read hit its
+      cap (deleting on a truncated read would destroy live cases). (2) `days_late` for delivered
+      orders came from `Order.last_event_at`, the last event of ANY type, so a later seller message
+      (or a manual add's ingest timestamp) overstated the lateness - a probe promised 19/07 and
+      delivered 24/07 reported 9 days instead of 5. Now read from the `delivered` TrackingEvent
+      (earliest wins) and the real date is carried on the row as `delivered_at` so the UI never
+      falls back to `last_event_at`. (3) draft regeneration keyed only on `stage`, so adding a
+      payment method at an unchanged stage flipped `draft_recipient` to `payment_provider` while
+      leaving merchant-addressed text under it; the key now includes the recipient (and retries a
+      missing draft). ALL THREE VERIFIED live: retire-on-delivery and sweep-on-archive both report
+      `retired:1` and leave 0 rows; the delivered probe reports `days_late:5` with
+      `delivered_at:2026-07-24`; the recipient flip regenerates the draft from "I am contacting
+      ProbeShopC support..." to "I am filing a formal dispute regarding a charge of 300 ILS...".
+      Idempotency re-confirmed (two consecutive scans: created/updated/retired all 0). 101 tests
+      green. **Also caught during review: the live app had SILENTLY REVERTED `refunds/scan` to the
+      pre-fix code** (a fresh call returned the old `{overdue_orders, skippedExisting}` shape and
+      created 2 bogus rows for one order); timing points at the `git push` triggering a Base44 sync
+      from `main`, which lacks these changes until the PR merges. Redeployed and re-verified. Treat
+      "re-check the live response shape after merging" as a release-checklist item.
 
 ## Architectural decisions (the chosen shape)
 

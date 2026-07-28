@@ -47,8 +47,12 @@ export default function RefundCase({ opportunity: opp, order, onAct, busy, onPay
 
   const delivered = opp.stage === 'delivered_late';
   const factHeadline = delivered ? `Arrived ${opp.days_late} days late` : `${opp.days_late} days late`;
+  // delivered_at is the real delivery date (from the delivered TrackingEvent),
+  // carried on the row precisely so this line cannot fall back to
+  // order.last_event_at, which is the last event of ANY type and would
+  // contradict the days_late headline above.
   const factSub = delivered
-    ? `promised ${formatDate(order.promised_date)}, delivered ${formatDate(order.last_event_at)}`
+    ? `promised ${formatDate(order.promised_date)}${opp.delivered_at ? `, delivered ${formatDate(opp.delivered_at)}` : ''}`
     : `promised ${formatDate(order.promised_date)}, still not delivered`;
 
   const showAmount = opp.amount_basis && opp.amount_basis !== 'unknown';
