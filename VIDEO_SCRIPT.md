@@ -23,8 +23,11 @@ and countdown.
 > "iTrack read the merchant, the items, the total, the promised date, and the tracking number, and
 > turned it into a live card. No setup, no forwarding."
 
-Optional 3s aside (only if you want to mention it): "One-click read-only Gmail sync is built and
-one flag away; it's waiting on a Base44 platform fix for per-user OAuth connectors."
+Screen: Settings or onboarding showing "Gmail connected (read-only)", then the dashboard's Scan my
+inbox button running with the progress counter.
+
+> "Or skip the pasting entirely: connect your own Gmail read-only, and iTrack scans the last 60
+> days of order mail through your own token. Every card on this board came from my real inbox."
 
 ## Beat 3: card anatomy (15-20s)
 
@@ -45,10 +48,10 @@ Screen: click the card, scroll the detail view.
 
 Screen: the overdue card's red accent + refund badge, then the Refunds screen.
 
-> "Here's the part that pays for itself. This Amazon order missed its guaranteed delivery date.
-> iTrack matched it against the merchant's own policy and drafted the claim, with my order number
-> and dates already in it. One click to copy, one click to the claim page. When the money lands, I
-> mark it recovered."
+> "Here's the part that pays for itself. This order missed its promised date, so iTrack opened a
+> case. It only offers a refund route when there's real evidence, the merchant's own policy or how
+> I actually paid, and it drafted the claim with my order number and dates already in it. One
+> click to copy, one click to the claim page. When the money lands, I mark it recovered."
 
 ## Beat 6: WhatsApp (20-25s)
 
@@ -62,8 +65,8 @@ Type: "where's my dog food?"
 
 Screen: the README architecture diagram (or a slide with the six checklist rows).
 
-> "Under the hood: Base44 all the way down. Eight entities behind row-level security, twelve Deno
+> "Under the hood: Base44 all the way down. Seven entities behind row-level security, twelve Deno
 > backend functions, an LLM extraction pipeline with strict JSON schemas, realtime subscriptions,
-> re-hosted media, and a tool-using agent. Forward one email and try it."
+> re-hosted media, and a tool-using agent. Paste one email and try it."
 
 End card: iTrack logo + live URL.

@@ -511,10 +511,17 @@ only its own data; WhatsApp round-trip on a real phone.
 
 ## Stage 8: Ship (MILESTONE 2: submitted)
 
-- [ ] Polish pass: every empty/loading/error state from PRD section 10; admin quarantine screen;
-      favicon + og tags; final visual QA at 375px and 1440px.
-- [ ] Demo account seeding: forward the real merchant emails so every state is represented
-      (in transit, arriving soon, overdue + refund, delivered); run scan + digest once.
+- [x] Polish pass (2026-07-28): ErrorBoundary (per-route + silent chat wrapper + top-level),
+      Settings bootstrap-error banner/retry + loading skeleton, OrderDetail error-vs-missing split
+      with silent-reload guard, Refunds all-clear block, RefundCase degraded card (tile count
+      matches list), Button size=sm real, GMAIL_CONNECT_ENABLED flag deleted with its stale
+      "coming soon" copy, site.webmanifest + og:site_name/og:image:alt. The "admin quarantine
+      screen" item is STRUCK: retired by the v1.1 per-user pivot, nothing to build. favicon + og
+      tags shipped earlier. 101 unit tests + build green.
+- [x] Demo account seeding: RETIRED 2026-07-28 by Roi's decision - judges self-register and paste
+      the committed sample emails (demo/sample-emails/, README "Judge it in 60 seconds"); the
+      sample pair was probe-verified on the live pipeline (parse -> merge into one order ->
+      cleaned up). No shared credentials.
 - [ ] README: architecture diagram, checklist-features table, run instructions, production-path
       section; finalize FEEDBACK.md (paste-ready answers for the 3 required questions + bugs).
 - [ ] Demo video 2-3 min per PRD section 13 beats; upload (YouTube unlisted).

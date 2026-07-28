@@ -731,8 +731,8 @@ Screens:
 5. **Refunds**: open opportunities with countdowns, claim text copy, dismissed/claimed history.
 6. **Settings**: digest toggle + hour, your address (again), account wipe (confirm dialog),
    WhatsApp connect button.
-7. **Admin quarantine** (admin role only): unroutable EmailRecords list, snippet view,
-   assign-to-user (re-runs pipeline) or delete.
+7. **Admin quarantine** (admin role only): RETIRED by amendment v1.1 (the per-user pivot removed
+   alias routing, so nothing is ever unroutable to a mailbox owner); never built, by design.
 8. **Assistant chat** (floating button on all screens): in-app agent conversation + WhatsApp link.
 
 Global states: every list has empty/loading/error designs; every mutation shows optimistic or
@@ -768,7 +768,7 @@ spinner feedback and a success/failure toast; failures map `reasons[]` messages 
 
 | Platform limit | Design response |
 |---|---|
-| 50 functions max | 11 functions |
+| 50 functions max | 12 functions (as shipped) |
 | 5-minute function execution | Sweep/scan process in batches with cursors; onNewMail handles one webhook burst at a time |
 | 5,000 rows per list/filter | All list calls filtered by owner_email; sweep paginates by cursor |
 | ~20KB registered string fields | snippet maxLength 2000; draft_message 2000; bodies never stored |
