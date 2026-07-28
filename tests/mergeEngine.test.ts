@@ -2,7 +2,7 @@
 // Run: deno test tests/
 // Zero dependencies so the suite runs offline; assertions are inline.
 
-import { decideMerge } from "../base44/shared/mergeEngine.ts";
+import { decideMerge, policyDomainMatches } from "../base44/shared/mergeEngine.ts";
 
 function eq(actual: unknown, expected: unknown, msg: string) {
   const a = JSON.stringify(actual);
@@ -91,4 +91,29 @@ Deno.test("no keys with fuzzy candidates goes to arbitration", () => {
     ["o1"],
   );
   eq(d, { kind: "ambiguous", candidateOrderIds: ["o1"] }, "fuzzy ids should surface as ambiguous");
+});
+
+// ---- policyDomainMatches (refunds/scan; PRD amendment v1.6) ----
+
+Deno.test("policyDomainMatches: exact domain matches", () => {
+  eq(policyDomainMatches("amazon.com", "amazon.com"), true, "identical domains should match");
+});
+
+Deno.test("policyDomainMatches: country TLD variants match the .com policy", () => {
+  eq(policyDomainMatches("amazon.co.uk", "amazon.com"), true, "amazon.co.uk should match amazon.com");
+  eq(policyDomainMatches("amazon.de", "amazon.com"), true, "amazon.de should match amazon.com");
+});
+
+Deno.test("policyDomainMatches: subdomain matches its brand's policy", () => {
+  eq(policyDomainMatches("smile.amazon.com", "amazon.com"), true, "smile.amazon.com should match amazon.com");
+});
+
+Deno.test("policyDomainMatches: different merchants never match", () => {
+  eq(policyDomainMatches("temu.com", "amazon.com"), false, "different brands must not match");
+});
+
+Deno.test("policyDomainMatches: empty domain on either side never matches", () => {
+  eq(policyDomainMatches("", "amazon.com"), false, "empty order domain should not match (no generic fallback)");
+  eq(policyDomainMatches("amazon.com", ""), false, "empty policy domain should not match");
+  eq(policyDomainMatches(null, null), false, "both empty should not match");
 });

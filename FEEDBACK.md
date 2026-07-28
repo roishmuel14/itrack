@@ -208,6 +208,18 @@ bugs. On submission day this file becomes the answers to the three required ques
 
 ## Bugs (with repro)
 
+- 2026-07-28 (CLI 0.1.5): **`base44 logs` returned zero results for a function invoked repeatedly
+  and verifiably** (`--function refunds/scan --since 24h`, also tried with no filters, `--env prod`,
+  and `--json`: every variant returned `[]` / "No logs found"). This is a DIFFERENT symptom from the
+  07-27 timeout entry below (this returned cleanly, just empty), so likely indexing lag rather than
+  the same fan-out timeout. Repro: `refunds/scan` was invoked >5 times in the prior hour via direct
+  `POST /api/apps/<id>/functions/refunds/scan` (each returning a real `{ok:true, ...}` JSON body
+  proving the function ran) and via `base44.functions.invoke` from `base44 exec` (also returning real
+  results, e.g. `orders/setPaymentMethod` writes that were then read back from the entity). None of
+  those verified-real invocations showed up in `base44 logs` under any flag combination. Net effect:
+  logs cannot be trusted as evidence a function did NOT run; only as evidence it DID (when they do
+  appear) - a false negative here could wrongly suggest a cron never fired. Worked around this
+  session by verifying function behavior directly (response bodies + entity reads) instead of logs.
 - 2026-07-27 (CLI 0.1.5): **`base44 logs` (no args, 11 functions) times out** with
   `Request timed out: GET .../functions-mgmt/orders%2FenrichProductImages/logs` when it walks all
   functions; `base44 logs --function <name>` for the same function succeeds instantly. Looks like

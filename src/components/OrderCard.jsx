@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { BadgePercent, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
-import { CHIP_BASE, countdownText, daysUntil, formatMoney, progressPercent, statusChip } from '@/lib/format';
+import { CHIP_BASE, countdownText, daysUntil, formatMoney, progressPercent, refundStageChip, statusChip } from '@/lib/format';
 import MerchantImage, { MerchantLogo } from '@/components/MerchantImage';
 
 const DONE_STATUSES = ['delivered', 'cancelled', 'returned'];
@@ -36,8 +36,9 @@ function RouteProgress({ order }) {
   );
 }
 
-export default function OrderCard({ order, refundCount = 0, onMarkDelivered, busy = false }) {
+export default function OrderCard({ order, refund, onMarkDelivered, busy = false }) {
   const chip = statusChip(order.status);
+  const refundChip = refund ? refundStageChip(refund.stage) : null;
   const overdue = !DONE_STATUSES.includes(order.status) && (daysUntil(order.promised_date) ?? 1) < 0;
   const itemsSummary = (order.items ?? []).map((i) => (i.qty > 1 ? `${i.qty}x ${i.name}` : i.name)).join(', ');
   const canComplete = Boolean(onMarkDelivered) && !DONE_STATUSES.includes(order.status);
@@ -100,11 +101,11 @@ export default function OrderCard({ order, refundCount = 0, onMarkDelivered, bus
         <p dir="auto" className="text-sm text-muted-foreground truncate mt-1" title={itemsSummary}>
           {itemsSummary || order.order_number || 'Order'}
         </p>
-        {(refundCount > 0 || lowConfidence) && (
+        {(refundChip || lowConfidence) && (
           <div className="flex items-center gap-2 mt-2 flex-wrap">
-            {refundCount > 0 && (
-              <span className={`${CHIP_BASE} bg-[hsl(var(--status-soon-bg))] text-[hsl(var(--status-soon))]`}>
-                <BadgePercent className="w-3 h-3" /> Refund available
+            {refundChip && (
+              <span className={`${CHIP_BASE} ${refundChip.className}`}>
+                <BadgePercent className="w-3 h-3" /> Refund case: {refundChip.label}
               </span>
             )}
             {lowConfidence && (

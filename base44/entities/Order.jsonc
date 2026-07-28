@@ -57,7 +57,18 @@
     },
     "confidence":     { "type": "number", "description": "0-1 from extraction; <0.6 shows a badge" },
     "last_event_at":  { "type": "string", "format": "date-time" },
-    "is_archived":    { "type": "boolean", "default": false }
+    "is_archived":    { "type": "boolean", "default": false },
+    "payment_method": {
+      "type": "string",
+      "enum": ["paypal", "credit_card", "debit_card", "bit", "apple_pay", "google_pay",
+               "bank_transfer", "cash_on_delivery", "gift_card", "other"],
+      "description": "How the order was paid. Absent = unknown. Gates payment-rail refund routes"
+    },
+    "payment_method_source": {
+      "type": "string",
+      "enum": ["email", "manual"],
+      "description": "manual always wins; email extraction must never overwrite a manual value"
+    }
   },
   "required": ["owner_email", "merchant_name", "status"],
   "rls": {

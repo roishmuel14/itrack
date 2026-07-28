@@ -497,6 +497,13 @@ export async function runCorePipeline(
       if (extraction.eta_date) patch.eta_date = extraction.eta_date;
       if (order.total == null && extraction.total != null) patch.total = extraction.total;
       if (extraction.currency && !order.currency) patch.currency = extraction.currency;
+      // Gap-fill only, like total/currency above (never last-email-wins like
+      // promised_date): a manual override (PRD amendment v1.6) always wins,
+      // so a payment_method already on the row is never touched by email.
+      if (extraction.payment_method && !order.payment_method && order.payment_method_source !== "manual") {
+        patch.payment_method = extraction.payment_method;
+        patch.payment_method_source = "email";
+      }
       if (items.length > 0) {
         // A later, richer email can now fill in images the first one missed.
         const merged = mergeItems(order.items ?? [], items);
@@ -548,6 +555,8 @@ export async function runCorePipeline(
         currency: extraction.currency ?? "USD",
         total: extraction.total ?? undefined,
         status: "ordered",
+        payment_method: extraction.payment_method ?? undefined,
+        payment_method_source: extraction.payment_method ? "email" : undefined,
         promised_date: extraction.promised_date ?? undefined,
         eta_date: extraction.eta_date ?? undefined,
         items,

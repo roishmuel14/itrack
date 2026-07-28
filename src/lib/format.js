@@ -98,6 +98,20 @@ export function statusChip(status) {
   return { label: meta.label, className: TONE_CLASSES[meta.tone], textClassName: TONE_TEXT_CLASSES[meta.tone] };
 }
 
+// RefundOpportunity.stage metadata (PRD amendment v1.6): staged escalation,
+// so the chip tone tracks how urgent the case is, not just that one exists.
+export const REFUND_STAGE_META = {
+  late: { label: 'Late', tone: 'soon' },
+  likely_lost: { label: 'Likely lost', tone: 'overdue' },
+  dispute: { label: 'Dispute', tone: 'overdue' },
+  delivered_late: { label: 'Arrived late', tone: 'transit' },
+};
+
+export function refundStageChip(stage) {
+  const meta = REFUND_STAGE_META[stage] ?? { label: stage, tone: 'neutral' };
+  return { label: meta.label, className: TONE_CLASSES[meta.tone], textClassName: TONE_TEXT_CLASSES[meta.tone] };
+}
+
 // Progress percent from ordered_at to promised_date, clamped 2-100.
 export function progressPercent(orderedAt, promisedDate) {
   if (!orderedAt || !promisedDate) return null;

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Version | 1.5 (2026-07-27); amendments v1.1-v1.5 follow the overview below |
+| Version | 1.6 (2026-07-28); amendments v1.1-v1.6 follow the overview below |
 | Status | Approved for build |
 | Product | iTrack: a personal delivery command center |
 | Platform | Base44 developer platform (CLI), Vite + React frontend, Deno backend functions |
@@ -81,6 +81,41 @@ document wins.
 > toggle and no cap was ever surfaced (see FEEDBACK.md 2026-07-27); the channel is live for the
 > agent already, and the only app-side work is the `WHATSAPP_ENABLED` flag guarding the in-app
 > affordances so they cannot dead-end.
+
+> **AMENDMENT v1.6 (2026-07-28): refund radar correctness rework - the one-per-order+policy model**
+> **is retired.** A live bug report (one LaPelota order generating two claims, "PayPal buyer
+> protection" and "Credit card chargeback," both ₪211.65, for an order never paid via PayPal) traced
+> to F5's own design: `matched = genericPolicies` fired PayPal AND chargeback together whenever no
+> merchant-specific policy matched, and `amount_estimate` was set to the full order total for both,
+> regardless of what each policy actually pays. The design (not just the code) was wrong, so F5 and
+> F3 are amended:
+> - **`RefundOpportunity` is now one row per late ORDER, not per order+policy.** It holds a `stage`
+>   (`late` -> `likely_lost` -> `dispute` as lateness grows, or `delivered_late` for a parcel that
+>   arrived past its promise) and a ranked `routes[]` array (merchant contact, merchant policy,
+>   payment dispute), each independently available/locked. Uniqueness is `owner_email + order_id`.
+> - **Generic catch-all policies are gone.** A route appears only on evidence: a merchant-domain
+>   match, or a payment-rail match against a NEW `Order.payment_method` (set by explicit email
+>   extraction, gap-fill only, or a manual picker via `orders/setPaymentMethod` - manual always
+>   wins). No evidence means a locked placeholder with an "add how you paid" unlock, never a
+>   fabricated claim.
+> - **Amounts are honest.** `RefundPolicy.remedy` records what a policy actually pays
+>   (`order_total` / `shipping_fee` / `store_credit` / `unknown`); only `order_total` ever carries a
+>   number (`RefundOpportunity.amount_estimate` + `currency`). A shipping-fee or store-credit remedy
+>   shows words, never the order total standing in for it.
+> - **Claim drafts match the stage and address the party who can act**: never a chargeback threat at
+>   `late`, a `delivered_late` draft asks for the merchant's own credit (not a refund, since the
+>   parcel arrived), and `draft_recipient` is `payment_provider` only when the drafted claim is
+>   actually a payment-rail dispute.
+> - **F5 AC1 restated:** forcing an order overdue and running the scan creates exactly one
+>   `RefundOpportunity` case (not one per matching policy), staged correctly for its lateness, with
+>   a drafted claim addressed to whichever party the top available route names.
+> - **F5 AC3 restated:** a dismissed CASE never resurfaces for the same order on rescan, even if it
+>   escalates a stage; the user can explicitly Restore it (`refunds/updateStatus`:
+>   `dismissed -> detected`).
+> - **F5 AC4 / F3 stats row restated:** the dashboard tile is `label="Refund claims"`,
+>   `value={openRefunds.length}` (a count can never be double-counted or mislabelled), with
+>   `"up to <amount>"` shown as subtext only when every open case's amount is real and in one
+>   currency - never a bare `$` sum over ILS data.
 
 ---
 

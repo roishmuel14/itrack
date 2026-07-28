@@ -9,7 +9,21 @@ import { useToast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 import CopyButton from '@/components/CopyButton';
 import { MerchantLogo } from '@/components/MerchantImage';
-import { countdownText, daysUntil, formatDate, formatDateTime, formatMoney, progressPercent, statusChip } from '@/lib/format';
+import PaymentMethodPicker from '@/components/refunds/PaymentMethodPicker';
+import { CHIP_BASE, countdownText, daysUntil, formatDate, formatDateTime, formatMoney, progressPercent, refundStageChip, statusChip } from '@/lib/format';
+
+const PAYMENT_METHOD_LABEL = {
+  paypal: 'PayPal',
+  credit_card: 'Credit card',
+  debit_card: 'Debit card',
+  bit: 'Bit',
+  apple_pay: 'Apple Pay',
+  google_pay: 'Google Pay',
+  bank_transfer: 'Bank transfer',
+  cash_on_delivery: 'Cash on delivery',
+  gift_card: 'Gift card',
+  other: 'Other',
+};
 
 const EVENT_DOT = {
   order_confirmation: 'bg-primary',
@@ -145,6 +159,14 @@ export default function OrderDetail() {
                   {order.total != null && <> - {formatMoney(order.total, order.currency)}</>}
                 </p>
               )}
+              <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground">
+                <span>Paid with</span>
+                {order.payment_method ? (
+                  <span className="font-medium text-foreground">{PAYMENT_METHOD_LABEL[order.payment_method] ?? order.payment_method}</span>
+                ) : (
+                  <PaymentMethodPicker orderId={order.id} onSet={() => load(true)} />
+                )}
+              </div>
             </div>
           </div>
           <span className={`text-xs font-semibold px-2.5 py-1.5 rounded-full ${chip.className}`}>{chip.label}</span>
@@ -204,17 +226,24 @@ export default function OrderDetail() {
         </div>
       </div>
 
-      {openRefunds.length > 0 && (
-        <div className="bg-[hsl(var(--status-soon-bg))] border border-[hsl(var(--status-soon))]/30 rounded-2xl p-5 mb-4">
-          <p className="font-semibold text-[hsl(var(--status-soon))] mb-1">This order may owe you money</p>
-          <p className="text-sm text-foreground/80 mb-3">
-            {openRefunds.length === 1 ? 'One refund opportunity was' : `${openRefunds.length} refund opportunities were`} detected. Review and claim from the Refunds screen.
-          </p>
-          <Link to="/refunds">
-            <Button variant="outline" className="bg-card">Open refund radar</Button>
-          </Link>
-        </div>
-      )}
+      {openRefunds.length > 0 && (() => {
+        const refund = openRefunds[0];
+        const chip = refundStageChip(refund.stage);
+        return (
+          <div className="bg-[hsl(var(--status-soon-bg))] border border-[hsl(var(--status-soon))]/30 rounded-2xl p-5 mb-4">
+            <div className="flex items-center gap-2 mb-1">
+              <p className="font-semibold text-[hsl(var(--status-soon))]">This order may owe you money</p>
+              <span className={`${CHIP_BASE} ${chip.className}`}>{chip.label}</span>
+            </div>
+            <p className="text-sm text-foreground/80 mb-3">
+              {refund.days_late} day{refund.days_late === 1 ? '' : 's'} late. Review the case and claim from the Refunds screen.
+            </p>
+            <Link to="/refunds">
+              <Button variant="outline" className="bg-card">Open refund radar</Button>
+            </Link>
+          </div>
+        );
+      })()}
 
       {shipments.length > 0 && (
         <div className="space-y-3 mb-4">
