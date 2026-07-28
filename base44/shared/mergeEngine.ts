@@ -2,6 +2,8 @@
 // no SDK calls, fully unit-testable. The ingest and mutation functions are
 // the only callers; no client ever sets a status directly.
 
+import { isCarrierDomain } from "./senderDomain.ts";
+
 export const ADVANCING_STATUSES = ["ordered", "shipped", "in_transit", "out_for_delivery", "delivered"] as const;
 export type AdvancingStatus = (typeof ADVANCING_STATUSES)[number];
 export type BranchStatus = "delayed" | "cancelled" | "returned";
@@ -198,22 +200,62 @@ export function decideMerge(
   return { kind: "new_order" };
 }
 
-// Same-merchant orders within a date window are arbitration candidates when
-// hard keys fail (PRD F2: LLM "same order?" arbitration).
+// Orders within a date window that could be the incoming email's order, for
+// LLM "same order?" arbitration when hard keys fail (PRD F2). Returned BEST
+// FIRST (same-domain matches before wildcard matches, then by date proximity):
+// the pipeline arbitrates only the top few, so ordering decides which
+// candidates get a hearing.
+//
+// Domain gate: same normalized domain matches; a missing or carrier domain on
+// EITHER side is a wildcard (carriers ship for everyone, so fedex.com never
+// identifies the merchant; a carrier-created row must stay findable by the
+// real merchant's later emails and vice versa). `widen` marks an incoming
+// email whose own domain is missing or a carrier; without it, a domainless
+// incoming email matches nothing, preserving the conservative default for
+// ordinary merchant mail.
+//
+// Window anchor: ordered_at, else last_event_at, else created_date. Rows born
+// from a number-less delivery notice have no ordered_at, and during a first
+// sync their created_date is "now" while the emails are weeks old; anchoring
+// on last_event_at keeps them inside the window (the Salomon duplicate).
+//
+// Hard exclusion: when both sides state an order number and the numbers
+// differ, they are different orders, never candidates.
+export interface FuzzyFacts {
+  merchant_domain?: string | null;
+  order_number?: string | null;
+  occurredAt: string;
+}
+
+export type FuzzyOrderCandidate = OrderLike & {
+  ordered_at?: string | null;
+  last_event_at?: string | null;
+  created_date?: string;
+};
+
 export function fuzzyCandidates(
-  facts: { merchant_domain?: string | null; occurredAt: string },
-  candidates: Array<OrderLike & { ordered_at?: string | null; created_date?: string }>,
-  windowDays = 45,
+  facts: FuzzyFacts,
+  candidates: FuzzyOrderCandidate[],
+  opts: { windowDays?: number; widen?: boolean } = {},
 ): string[] {
+  const windowDays = opts.windowDays ?? 45;
   const domain = normalizeDomain(facts.merchant_domain);
-  if (!domain) return [];
+  if (!domain && !opts.widen) return [];
+  const orderNo = normalizeOrderNumber(facts.order_number);
   const t = Date.parse(facts.occurredAt);
-  return candidates
-    .filter((o) => normalizeDomain(o.merchant_domain) === domain)
-    .filter((o) => {
-      const anchor = Date.parse(o.ordered_at ?? o.created_date ?? "");
-      if (Number.isNaN(anchor) || Number.isNaN(t)) return true;
-      return Math.abs(t - anchor) <= windowDays * 24 * 3600 * 1000;
-    })
-    .map((o) => o.id);
+  const scored: Array<{ id: string; sameDomain: boolean; distance: number }> = [];
+  for (const o of candidates) {
+    const od = normalizeDomain(o.merchant_domain);
+    const sameDomain = !!domain && !!od && od === domain;
+    const wildcard = !!opts.widen || !od || isCarrierDomain(od);
+    if (!sameDomain && !wildcard) continue;
+    const candidateNo = normalizeOrderNumber(o.order_number);
+    if (orderNo && candidateNo && candidateNo !== orderNo) continue;
+    const anchor = Date.parse(o.ordered_at ?? o.last_event_at ?? o.created_date ?? "");
+    const distance = Number.isNaN(anchor) || Number.isNaN(t) ? Infinity : Math.abs(t - anchor);
+    if (distance !== Infinity && distance > windowDays * 24 * 3600 * 1000) continue;
+    scored.push({ id: o.id, sameDomain, distance });
+  }
+  scored.sort((a, b) => (a.sameDomain !== b.sameDomain ? (a.sameDomain ? -1 : 1) : a.distance - b.distance));
+  return scored.map((s) => s.id);
 }

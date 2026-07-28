@@ -111,3 +111,77 @@ Deno.test("fuzzyCandidates: same merchant within window only", () => {
   ];
   assertEquals(fuzzyCandidates({ merchant_domain: "temu.com", occurredAt: "2026-07-10" }, orders), ["near"]);
 });
+
+Deno.test("fuzzyCandidates: anchor falls back to last_event_at when ordered_at is null (Salomon regression)", () => {
+  // A row born from a number-less delivery notice during a first sync:
+  // created_date is sync day ("now"), but its event happened weeks earlier.
+  const sparse = {
+    id: "sparse",
+    merchant_domain: "salomon.com",
+    ordered_at: null,
+    last_event_at: "2026-05-30",
+    created_date: "2026-07-26",
+  };
+  const hit = fuzzyCandidates({ merchant_domain: "salomon.com", occurredAt: "2026-05-28" }, [sparse]);
+  assertEquals(hit, ["sparse"]);
+  // Without last_event_at the anchor degrades to created_date and misses.
+  const noEvents = { ...sparse, last_event_at: null };
+  assertEquals(fuzzyCandidates({ merchant_domain: "salomon.com", occurredAt: "2026-05-28" }, [noEvents]), []);
+});
+
+Deno.test("fuzzyCandidates: best-first ordering, same-domain before wildcard, then proximity", () => {
+  const orders = [
+    { id: "far-same", merchant_domain: "temu.com", ordered_at: "2026-06-20" },
+    { id: "near-wildcard", merchant_domain: "fedex.com", ordered_at: "2026-07-09" },
+    { id: "near-same", merchant_domain: "temu.com", ordered_at: "2026-07-08" },
+    { id: "no-anchor", merchant_domain: "temu.com" },
+  ];
+  assertEquals(
+    fuzzyCandidates({ merchant_domain: "temu.com", occurredAt: "2026-07-10" }, orders),
+    ["near-same", "far-same", "no-anchor", "near-wildcard"],
+  );
+});
+
+Deno.test("fuzzyCandidates: two explicit differing order numbers never match", () => {
+  const orders = [
+    { id: "different", merchant_domain: "temu.com", order_number: "PO-111", ordered_at: "2026-07-01" },
+    { id: "same-number", merchant_domain: "temu.com", order_number: "#po-222", ordered_at: "2026-07-02" },
+    { id: "no-number", merchant_domain: "temu.com", ordered_at: "2026-07-03" },
+  ];
+  assertEquals(
+    fuzzyCandidates({ merchant_domain: "temu.com", order_number: "PO-222", occurredAt: "2026-07-05" }, orders),
+    ["no-number", "same-number"],
+  );
+  // No incoming number: nothing is excluded.
+  assertEquals(
+    fuzzyCandidates({ merchant_domain: "temu.com", occurredAt: "2026-07-05" }, orders).length,
+    3,
+  );
+});
+
+Deno.test("fuzzyCandidates: widen lets domainless/carrier emails search every order", () => {
+  const orders = [
+    { id: "amazon", merchant_domain: "amazon.com", ordered_at: "2026-07-01" },
+    { id: "ksp", merchant_domain: "ksp.co.il", ordered_at: "2026-07-03" },
+  ];
+  // A carrier notice with no usable merchant domain matches nothing today...
+  assertEquals(fuzzyCandidates({ merchant_domain: null, occurredAt: "2026-07-04" }, orders), []);
+  // ...and everything in-window when widened (best-first by proximity).
+  assertEquals(
+    fuzzyCandidates({ merchant_domain: null, occurredAt: "2026-07-04" }, orders, { widen: true }),
+    ["ksp", "amazon"],
+  );
+});
+
+Deno.test("fuzzyCandidates: carrier-domain and domainless CANDIDATES are wildcards", () => {
+  const orders = [
+    { id: "fedex-card", merchant_domain: "fedex.com", ordered_at: "2026-07-01" },
+    { id: "domainless", ordered_at: "2026-07-02" },
+    { id: "other-store", merchant_domain: "amazon.com", ordered_at: "2026-07-03" },
+  ];
+  // A merchant email must be able to find a card born from a carrier notice.
+  assertEquals(
+    fuzzyCandidates({ merchant_domain: "salomon.com", occurredAt: "2026-07-04" }, orders),
+    ["domainless", "fedex-card"],
+  );
+});

@@ -75,6 +75,23 @@ Deno.serve(async (req) => {
       if (reasons.length) return fail(422, "Cannot add order", reasons);
 
       const service = base44.asServiceRole.entities;
+
+      // Same tracking number = same parcel: return the existing order instead
+      // of minting a duplicate card (agent tool calls and double submits land
+      // here too).
+      const cleanTracking = trackingNumber.replace(/[\s-]/g, "").toUpperCase();
+      const myShipments = await service.Shipment.filter(
+        { owner_email: user.email },
+        "-created_date",
+        1000,
+      );
+      const existing = myShipments.find(
+        (s: any) => (s.tracking_number ?? "").replace(/[\s-]/g, "").toUpperCase() === cleanTracking,
+      );
+      if (existing) {
+        return ok({ order_id: existing.order_id, shipment_id: existing.id, already_exists: true });
+      }
+
       const carrier = resolveCarrier(trackingNumber);
       const now = new Date().toISOString();
       const order = await service.Order.create({

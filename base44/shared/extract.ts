@@ -54,8 +54,8 @@ export const EXTRACTION_SCHEMA = {
       enum: [...PRODUCT_KINDS],
       description: "What was purchased. physical_goods = tangible items shipped, couriered, or awaiting store/locker pickup (a carrier's parcel notification always counts); food_or_grocery_delivery = restaurant, food-app, or supermarket/grocery orders; digital_or_saas = software, subscriptions, licenses, domains, hosting, digital content; service_or_booking = flights, hotels, events, insurance, utilities, rides; other = none of these or unclear",
     },
-    merchant_name: { type: ["string", "null"], description: "Store/brand name, e.g. Amazon" },
-    merchant_domain: { type: ["string", "null"], description: "Bare domain, e.g. amazon.com; null if unknown" },
+    merchant_name: { type: ["string", "null"], description: "Store/brand the goods were bought FROM, e.g. Amazon. For a carrier notification: the shipper (store) if the notice names one, else the carrier's name" },
+    merchant_domain: { type: ["string", "null"], description: "Bare domain of the STORE, e.g. amazon.com; null if unknown. Never a carrier or delivery-company domain (fedex.com, ups.com, israelpost.co.il and similar)" },
     order_number: { type: ["string", "null"], description: "Merchant order id exactly as written" },
     event_type: {
       type: ["string", "null"],
@@ -165,6 +165,7 @@ export function buildExtractionPrompt(email: EmailForExtraction): string {
     "",
     "STEP 3 - EXTRACT (only when relevant):",
     "- Extract ONLY what the email states. Never guess or invent values; use null when absent.",
+    "- Carrier and delivery-company notifications (FedEx, UPS, DHL, Israel Post / דואר ישראל, couriers, pickup-point and locker services): the carrier's name goes in the carrier field, NEVER in merchant_domain. merchant_name is the STORE the parcel was bought from when the email reveals it; if no store is named, use the carrier's name so the card stays readable. merchant_domain is the store's bare domain only when you are confident of it; otherwise null. Never output a carrier's or delivery company's domain as merchant_domain.",
     "- Dates: resolve to ISO format (YYYY-MM-DD) using the reference date for relative phrases like 'arriving tomorrow'. A date range like 'Jul 25 - Aug 2' means promised_date is the LAST day.",
     "- promised_date / eta_date come from arrival-date phrases only, never from payment or billing dates.",
     "- items[].image_url: pick from the numbered image candidates below ONLY if it clearly shows that product; otherwise null. Never output any other URL.",
@@ -214,23 +215,49 @@ export async function analyzeEmail(
   return result as ExtractionResult;
 }
 
-// "Same order?" arbitration for ambiguous merges (PRD section 8).
+// "Same order?" arbitration for ambiguous merges (PRD section 8). Summary A is
+// built from ONE incoming email; summary B from an existing order card. Cards
+// born from carrier or delivery notices are legitimately sparse, so missing
+// fields must read as missing data, never as evidence of difference (the old
+// "when in doubt, answer false" prompt turned every sparse candidate into a
+// guaranteed duplicate).
+export interface ArbitrationInput {
+  incoming: string;
+  existing: string;
+  // True when the two sides do not share a confirmed store (the candidate
+  // reached the list through a carrier/domainless wildcard). Cross-merchant
+  // matches need positive linking evidence; same-merchant matches lean toward
+  // merging, because a duplicate card is the worse failure.
+  crossMerchant: boolean;
+}
+
+export function buildArbitrationPrompt(a: ArbitrationInput): string {
+  const modeRule = a.crossMerchant
+    ? "- The two sides do NOT share a confirmed store: one may be a carrier notice or missing its merchant. Answer true ONLY on positive linking evidence: the email names the order's store or brand, a matching tracking number, matching item names, or a matching total with fitting dates. When in doubt, answer false."
+    : "- Both sides are the same merchant. If nothing above contradicts, answer true: two cards for one purchase is the worse failure. Answer false only on a concrete contradiction.";
+  return [
+    "You are the order-matching arbiter of a package-tracking app. Summary A describes ONE incoming email. Summary B describes an EXISTING order card built from earlier emails. Decide whether A is about the same real-world purchase as B.",
+    "",
+    "Rules:",
+    '- Fields marked "unknown" are MISSING data, never evidence of a different order. Carrier and delivery notices routinely name no order number, no items, and no total, and a card created from such an email is legitimately sparse.',
+    "- An order's lifecycle runs order confirmation, then shipping, then delivery, usually within a few weeks. Dates that fit one lifecycle support a match.",
+    "- Concrete contradictions mean DIFFERENT orders (answer false): two different explicit order numbers; two different explicit tracking numbers when items or totals also disagree (one order can ship as several parcels); clearly different item sets bought around the same time; materially different totals when both are stated; a shipping or delivery event dated before the other side's order was placed (allow one day of slack).",
+    modeRule,
+    "",
+    "Summary A (incoming email):",
+    a.incoming,
+    "",
+    "Summary B (existing order):",
+    a.existing,
+  ].join("\n");
+}
+
 export async function arbitrateSameOrder(
   base44: Base44Client,
-  incoming: string,
-  existing: string,
+  input: ArbitrationInput,
 ): Promise<boolean> {
   const result = await base44.asServiceRole.integrations.Core.InvokeLLM({
-    prompt: [
-      "Two order summaries from the same merchant follow. Decide if they describe the SAME purchase (one order) or different purchases.",
-      "Consider order numbers, items, totals, and dates. When in doubt, answer false (different orders).",
-      "",
-      "Summary A (incoming email):",
-      incoming,
-      "",
-      "Summary B (existing order):",
-      existing,
-    ].join("\n"),
+    prompt: buildArbitrationPrompt(input),
     response_json_schema: {
       type: "object",
       properties: { same_order: { type: "boolean" } },

@@ -89,7 +89,13 @@ Deno.serve(async (req) => {
       maxResults: BATCH,
       pageToken: reqPageToken,
     });
-    for (const m of page.messages) {
+    // Gmail lists newest-first. Process the page OLDEST-FIRST so the
+    // informative order confirmation usually creates the card before the
+    // sparse shipping/delivery notices of the same thread try to merge into
+    // it (a number-less notice processed first creates a sparse order the
+    // later confirmation may fail to match). Cross-page order is still
+    // newest-page-first; the merge engine's widened fuzzy matching covers it.
+    for (const m of [...page.messages].reverse()) {
       scanned++;
       const r = await processOwnedGmailMessage(base44, accessToken, m.id, user.email, runCache);
       results[r.status] = (results[r.status] ?? 0) + 1;
