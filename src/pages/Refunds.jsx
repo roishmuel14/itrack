@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ReceiptText, RefreshCw } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ReceiptText, RefreshCw } from 'lucide-react';
 import { Order, RefundOpportunity } from '@/api/entities';
 import { invokeFunction } from '@/api/functions';
 import { useToast } from '@/lib/toast';
@@ -152,6 +152,18 @@ export default function Refunds() {
     <div className="max-w-2xl mx-auto">
       <h1 className="text-xl font-extrabold tracking-tight mb-1">Refund radar</h1>
       <p className="text-sm text-muted-foreground mb-6">Late packages that may owe you money, with ready-to-send claims.</p>
+
+      {actNow.length === 0 && watching.length === 0 && inProgress.length === 0 && (
+        <div className="text-center py-14 rounded-2xl border-2 border-dashed mb-8">
+          <CheckCircle2 className="w-6 h-6 text-[hsl(var(--status-delivered))]/70 mx-auto mb-3" aria-hidden="true" />
+          <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            No open cases right now
+          </p>
+          <p className="text-sm text-muted-foreground mt-2 px-6">
+            Every case is settled. A new one appears here the moment a package runs late enough to claim.
+          </p>
+        </div>
+      )}
 
       <Section title={actNow.length ? 'Act now' : null} items={actNow} {...sectionProps} />
       <Section title={watching.length ? 'Watching' : null} items={watching} {...sectionProps} />

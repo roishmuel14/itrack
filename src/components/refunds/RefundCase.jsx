@@ -37,8 +37,9 @@ export default function RefundCase({ opportunity: opp, order, onAct, busy, onPay
   const [draftOpen, setDraftOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  if (!order) return null;
-
+  // No early return when the order is missing (list cap or a race with a
+  // delete): the case degrades to a visible card instead of silently
+  // vanishing, which would desync the Dashboard tile count from this list.
   const stageChip = refundStageChip(opp.stage);
   const routes = opp.routes ?? [];
   const claimRoutes = routes.filter((r) => r.kind !== 'merchant_contact');
@@ -52,8 +53,12 @@ export default function RefundCase({ opportunity: opp, order, onAct, busy, onPay
   // order.last_event_at, which is the last event of ANY type and would
   // contradict the days_late headline above.
   const factSub = delivered
-    ? `promised ${formatDate(order.promised_date)}${opp.delivered_at ? `, delivered ${formatDate(opp.delivered_at)}` : ''}`
-    : `promised ${formatDate(order.promised_date)}, still not delivered`;
+    ? [order && `promised ${formatDate(order.promised_date)}`, opp.delivered_at && `delivered ${formatDate(opp.delivered_at)}`]
+        .filter(Boolean)
+        .join(', ') || 'delivered late'
+    : order
+      ? `promised ${formatDate(order.promised_date)}, still not delivered`
+      : 'still not delivered';
 
   const showAmount = opp.amount_basis && opp.amount_basis !== 'unknown';
   const amountLine = showAmount ? AMOUNT_LINE[opp.amount_basis]?.(opp) ?? null : null;
@@ -62,20 +67,34 @@ export default function RefundCase({ opportunity: opp, order, onAct, busy, onPay
   const deadlineDays = daysUntil(opp.deadline);
   const showDeadline = opp.deadline && deadlineDays != null && deadlineDays <= 60;
 
-  const recipientLabel = opp.draft_recipient === 'payment_provider' ? 'your payment provider' : `${order.merchant_name} support`;
+  const recipientLabel = opp.draft_recipient === 'payment_provider'
+    ? 'your payment provider'
+    : order
+      ? `${order.merchant_name} support`
+      : 'the merchant';
 
   const open = isOpenRefundCase(opp);
 
   return (
     <div className="bg-card rounded-2xl border card-shadow p-5">
       <div className="flex items-start justify-between gap-3 mb-3.5">
-        <Link to={`/orders/${order.id}`} className="flex items-center gap-2.5 min-w-0 group">
-          <MerchantLogo order={order} size={28} rounded="rounded-lg" className="border" />
-          <div className="min-w-0">
-            <p className="font-semibold text-[15px] truncate group-hover:text-primary transition-colors">{order.merchant_name}</p>
-            {order.order_number && <p className="text-xs text-muted-foreground truncate">order {order.order_number}</p>}
+        {order ? (
+          <Link to={`/orders/${order.id}`} className="flex items-center gap-2.5 min-w-0 group">
+            <MerchantLogo order={order} size={28} rounded="rounded-lg" className="border" />
+            <div className="min-w-0">
+              <p className="font-semibold text-[15px] truncate group-hover:text-primary transition-colors">{order.merchant_name}</p>
+              {order.order_number && <p className="text-xs text-muted-foreground truncate">order {order.order_number}</p>}
+            </div>
+          </Link>
+        ) : (
+          <div className="flex items-center gap-2.5 min-w-0">
+            <MerchantLogo order={null} size={28} rounded="rounded-lg" className="border" />
+            <div className="min-w-0">
+              <p className="font-semibold text-[15px] truncate text-muted-foreground">Order no longer available</p>
+              <p className="text-xs text-muted-foreground truncate">the original order was removed</p>
+            </div>
           </div>
-        </Link>
+        )}
         <span className={`${CHIP_BASE} ${stageChip.className} shrink-0`}>
           <span className="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true" />
           {stageChip.label}
@@ -120,13 +139,13 @@ export default function RefundCase({ opportunity: opp, order, onAct, busy, onPay
                 <RouteRow
                   key={`${r.kind}:${r.policy_key}`}
                   route={r}
-                  onUnlockPaymentMethod={r.blocked_by === 'unknown_payment_method' ? () => setPickerOpen(true) : undefined}
+                  onUnlockPaymentMethod={order && r.blocked_by === 'unknown_payment_method' ? () => setPickerOpen(true) : undefined}
                 />
               ))}
             </div>
           )}
 
-          {pickerOpen && (
+          {pickerOpen && order && (
             <div className="mt-2.5 flex items-center gap-2 flex-wrap">
               <PaymentMethodPicker
                 orderId={order.id}

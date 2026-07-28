@@ -54,7 +54,7 @@ add databases, auth providers, or hosting outside Base44.
 
 ## Layout
 
-`base44/entities/` 7 schemas; `base44/functions/` 9 functions (inbox/syncMyMail, account/,
+`base44/entities/` 7 schemas; `base44/functions/` 12 functions (inbox/syncMyMail, account/,
 settings/, orders/, refunds/, digest/); `base44/shared/` parse+merge modules; `base44/agents/
 itrack_assistant.jsonc`; `scripts/` exec-run seed/verify tools. Gmail access is a per-user
 app-user connector configured in Workspace Settings (connector id in the `GMAIL_CONNECTOR_ID`

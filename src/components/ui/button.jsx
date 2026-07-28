@@ -11,7 +11,7 @@ const Button = forwardRef(({ className = '', variant = 'default', size, ...props
   const baseStyles =
     'inline-flex items-center justify-center rounded-xl text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50';
   const variantStyles = VARIANTS[variant] ?? VARIANTS.default;
-  const sizeStyles = size === 'icon' ? 'h-9 w-9' : 'h-9 px-4 py-2';
+  const sizeStyles = size === 'icon' ? 'h-9 w-9' : size === 'sm' ? 'h-8 px-3' : 'h-9 px-4 py-2';
 
   return <button ref={ref} className={`${baseStyles} ${variantStyles} ${sizeStyles} ${className}`} {...props} />;
 });

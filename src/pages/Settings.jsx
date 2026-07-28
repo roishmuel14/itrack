@@ -1,17 +1,17 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, Image as ImageIcon, Mail, MessageCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Image as ImageIcon, Mail, MessageCircle, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/api/auth';
 import { invokeFunction } from '@/api/functions';
 import { runImageEnrichment } from '@/api/enrichment';
 import { base44 } from '@/api/base44Client';
 import { useToast } from '@/lib/toast';
-import { GMAIL_CONNECT_ENABLED, WHATSAPP_ENABLED } from '@/lib/config';
+import { WHATSAPP_ENABLED } from '@/lib/config';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
 export default function Settings() {
-  const { user, settings, setSettings, gmail, disconnectGmail, refresh } = useAuth();
+  const { user, settings, settingsError, retryBootstrap, setSettings, gmail, disconnectGmail, refresh } = useAuth();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [wipeOpen, setWipeOpen] = useState(false);
@@ -68,9 +68,25 @@ export default function Settings() {
     }
   };
 
+  const settingsLoading = !settings && !settingsError;
+
   return (
     <div className="max-w-xl mx-auto">
       <h1 className="text-xl font-extrabold tracking-tight mb-5">Settings</h1>
+
+      {settingsError && (
+        <div className="bg-card rounded-2xl border border-[hsl(var(--status-overdue))]/30 card-shadow p-5 mb-4 flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <p className="font-semibold text-sm flex items-center gap-1.5 text-[hsl(var(--status-overdue))]">
+              <AlertTriangle className="w-4 h-4" /> Could not load your settings
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">The digest and Gmail options below may look wrong until this loads.</p>
+          </div>
+          <Button variant="outline" onClick={retryBootstrap}>
+            <RefreshCw className="w-4 h-4 me-1.5" /> Retry
+          </Button>
+        </div>
+      )}
 
       <div className="bg-card rounded-2xl border card-shadow p-5 space-y-5 mb-4">
         <div>
@@ -81,12 +97,7 @@ export default function Settings() {
           <p className="text-sm font-semibold mb-2 flex items-center gap-1.5">
             <Mail className="w-4 h-4 text-primary" /> Gmail connection
           </p>
-          {!GMAIL_CONNECT_ENABLED ? (
-            <p className="text-sm text-muted-foreground">
-              Automatic read-only Gmail sync is coming soon. For now, add orders from the dashboard by
-              pasting an order email or a tracking number.
-            </p>
-          ) : gmail.connected ? (
+          {gmail.connected ? (
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <p className="inline-flex items-center gap-1.5 text-sm text-[hsl(var(--status-delivered))] font-medium">
                 <CheckCircle2 className="w-4 h-4" /> Connected (read-only)
@@ -172,17 +183,21 @@ export default function Settings() {
               Arriving today, newly overdue, and refund deadlines. Skipped when there is nothing to say.
             </p>
           </div>
-          <button
-            role="switch"
-            aria-checked={!!settings?.digest_enabled}
-            disabled={busy || !settings}
-            onClick={() => saveDigest({ digest_enabled: !settings.digest_enabled })}
-            className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${settings?.digest_enabled ? 'bg-primary' : 'bg-muted-foreground/30'}`}
-          >
-            <span
-              className={`absolute top-0.5 w-5 h-5 rounded-full bg-white card-shadow transition-all ${settings?.digest_enabled ? 'start-[22px]' : 'start-0.5'}`}
-            />
-          </button>
+          {settingsLoading ? (
+            <span className="w-11 h-6 rounded-full bg-muted animate-pulse shrink-0" aria-hidden="true" />
+          ) : (
+            <button
+              role="switch"
+              aria-checked={!!settings?.digest_enabled}
+              disabled={busy || !settings}
+              onClick={() => saveDigest({ digest_enabled: !settings.digest_enabled })}
+              className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${settings?.digest_enabled ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+            >
+              <span
+                className={`absolute top-0.5 w-5 h-5 rounded-full bg-white card-shadow transition-all ${settings?.digest_enabled ? 'start-[22px]' : 'start-0.5'}`}
+              />
+            </button>
+          )}
         </div>
         {settings?.digest_enabled && (
           <div className="flex items-center gap-2 mt-4 pt-4 border-t">
