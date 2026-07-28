@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import CopyButton from '@/components/CopyButton';
 import { MerchantLogo } from '@/components/MerchantImage';
 import PaymentMethodPicker from '@/components/refunds/PaymentMethodPicker';
-import { CHIP_BASE, countdownText, daysUntil, formatDate, formatDateTime, formatMoney, progressPercent, refundStageChip, statusChip } from '@/lib/format';
+import { CHIP_BASE, countdownText, daysUntil, formatDate, formatDateTime, formatMoney, isOpenRefundCase, progressPercent, refundStageChip, statusChip } from '@/lib/format';
 
 const PAYMENT_METHOD_LABEL = {
   paypal: 'PayPal',
@@ -117,7 +117,7 @@ export default function OrderDetail() {
   const chip = order ? statusChip(order.status) : null;
   const overdue = order && !['delivered', 'cancelled', 'returned'].includes(order.status) && (daysUntil(order.promised_date) ?? 1) < 0;
   const pct = order ? progressPercent(order.ordered_at, order.promised_date) : null;
-  const openRefunds = useMemo(() => refunds.filter((r) => ['detected', 'notified'].includes(r.status)), [refunds]);
+  const openRefunds = useMemo(() => refunds.filter(isOpenRefundCase), [refunds]);
 
   if (state === 'loading') {
     return (

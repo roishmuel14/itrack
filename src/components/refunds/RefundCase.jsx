@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronDown, CheckCircle2, ExternalLink, RotateCcw, XCircle } from 'lucide-react';
-import { CHIP_BASE, daysUntil, formatDate, formatMoney, refundStageChip } from '@/lib/format';
+import { CHIP_BASE, daysUntil, formatDate, formatMoney, isOpenRefundCase, refundStageChip } from '@/lib/format';
 import { MerchantLogo } from '@/components/MerchantImage';
 import { Button } from '@/components/ui/button';
 import CopyButton from '@/components/CopyButton';
@@ -64,7 +64,7 @@ export default function RefundCase({ opportunity: opp, order, onAct, busy, onPay
 
   const recipientLabel = opp.draft_recipient === 'payment_provider' ? 'your payment provider' : `${order.merchant_name} support`;
 
-  const open = ['detected', 'notified'].includes(opp.status);
+  const open = isOpenRefundCase(opp);
 
   return (
     <div className="bg-card rounded-2xl border card-shadow p-5">

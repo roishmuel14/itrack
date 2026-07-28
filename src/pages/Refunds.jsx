@@ -5,6 +5,7 @@ import { invokeFunction } from '@/api/functions';
 import { useToast } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 import RefundCase from '@/components/refunds/RefundCase';
+import { isOpenRefundCase } from '@/lib/format';
 
 const URGENT_DEADLINE_DAYS = 14;
 
@@ -131,7 +132,7 @@ export default function Refunds() {
   }
 
   const actNow = opps
-    .filter((o) => ['detected', 'notified'].includes(o.status))
+    .filter(isOpenRefundCase)
     .filter((o) => ['dispute', 'likely_lost'].includes(o.stage) || (daysUntilDate(o.deadline) ?? 999) <= URGENT_DEADLINE_DAYS)
     .sort((a, b) => {
       const da = a.deadline ?? '9999-12-31';
@@ -140,7 +141,7 @@ export default function Refunds() {
     });
   const actNowIds = new Set(actNow.map((o) => o.id));
   const watching = opps
-    .filter((o) => ['detected', 'notified'].includes(o.status) && !actNowIds.has(o.id))
+    .filter((o) => isOpenRefundCase(o) && !actNowIds.has(o.id))
     .sort((a, b) => (b.days_late ?? 0) - (a.days_late ?? 0));
   const inProgress = opps.filter((o) => o.status === 'claimed');
   const history = opps.filter((o) => ['dismissed', 'recovered'].includes(o.status));

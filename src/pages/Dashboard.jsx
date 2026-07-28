@@ -14,10 +14,9 @@ import ManualAddDialog from '@/components/ManualAddDialog';
 import OrderCard from '@/components/OrderCard';
 import ActivityFeed from '@/components/ActivityFeed';
 import StatCell, { STAT_DIVIDERS } from '@/components/StatCell';
-import { daysUntil, formatMoney } from '@/lib/format';
+import { daysUntil, formatMoney, isOpenRefundCase } from '@/lib/format';
 
 const ACTIVE_STATUSES = ['ordered', 'shipped', 'in_transit', 'out_for_delivery', 'delayed'];
-const OPEN_REFUND_STATUSES = ['detected', 'notified'];
 const FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'transit', label: 'In transit' },
@@ -136,7 +135,7 @@ export default function Dashboard() {
   const refundByOrder = useMemo(() => {
     const m = {};
     for (const r of refunds) {
-      if (OPEN_REFUND_STATUSES.includes(r.status)) m[r.order_id] = r;
+      if (isOpenRefundCase(r)) m[r.order_id] = r;
     }
     return m;
   }, [refunds]);
@@ -259,11 +258,9 @@ export default function Dashboard() {
 
   // Honest tile (PRD amendment v1.6): the headline is always a count, so it
   // can never be wrong. Money appears only as subtext, and only when every
-  // open case's amount is real and in the same currency.
-  const today = new Date().toISOString().slice(0, 10);
-  const openRefunds = refunds.filter(
-    (r) => OPEN_REFUND_STATUSES.includes(r.status) && (!r.deadline || r.deadline >= today),
-  );
+  // open case's amount is real and in the same currency. isOpenRefundCase is
+  // shared with the Refunds page so this count always matches that list.
+  const openRefunds = refunds.filter(isOpenRefundCase);
   const withAmount = openRefunds.filter((r) => r.amount_estimate != null);
   const refundCurrencies = new Set(withAmount.map((r) => r.currency || 'USD'));
   const refundPotential = withAmount.length && refundCurrencies.size === 1
