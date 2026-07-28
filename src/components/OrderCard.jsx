@@ -1,6 +1,7 @@
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { BadgePercent, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
-import { CHIP_BASE, countdownText, daysUntil, formatMoney, progressPercent, statusChip } from '@/lib/format';
+import { BadgePercent, AlertCircle, CheckCircle2, Loader2, MoreVertical, Trash2 } from 'lucide-react';
+import { CHIP_BASE, countdownText, daysUntil, formatDate, formatMoney, progressPercent, statusChip } from '@/lib/format';
 import MerchantImage, { MerchantLogo } from '@/components/MerchantImage';
 
 const DONE_STATUSES = ['delivered', 'cancelled', 'returned'];
@@ -36,13 +37,34 @@ function RouteProgress({ order }) {
   );
 }
 
-export default function OrderCard({ order, refundCount = 0, onMarkDelivered, busy = false }) {
+export default function OrderCard({ order, refundCount = 0, onMarkDelivered, onDelete, busy = false }) {
   const chip = statusChip(order.status);
   const overdue = !DONE_STATUSES.includes(order.status) && (daysUntil(order.promised_date) ?? 1) < 0;
   const itemsSummary = (order.items ?? []).map((i) => (i.qty > 1 ? `${i.qty}x ${i.name}` : i.name)).join(', ');
   const canComplete = Boolean(onMarkDelivered) && !DONE_STATUSES.includes(order.status);
   const lowConfidence = order.confidence != null && order.confidence < 0.6;
   const eta = countdownText(order.eta_date || order.promised_date, { delivered: order.status === 'delivered' });
+  const deliveredLine = order.delivered_at ? `delivered ${formatDate(order.delivered_at)}` : 'delivered';
+
+  // Card-level overflow menu. It lives inside the card's overflow-hidden box, so
+  // it opens downward from the top-start corner where there is always room.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onPointerDown = (e) => {
+      if (!menuRef.current?.contains(e.target)) setMenuOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
 
   return (
     // Stretched-link pattern: the whole card is clickable via the absolutely
@@ -68,6 +90,40 @@ export default function OrderCard({ order, refundCount = 0, onMarkDelivered, bus
           {chip.label}
         </span>
       </div>
+
+      {Boolean(onDelete) && (
+        <div className="absolute top-2 start-2 z-10" ref={menuRef}>
+          <button
+            type="button"
+            onClick={() => setMenuOpen((o) => !o)}
+            disabled={busy}
+            aria-label={`More actions for the order from ${order.merchant_name}`}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            className="inline-grid place-items-center w-8 h-8 rounded-full bg-white/85 backdrop-blur-md border border-white/50 shadow-sm text-foreground/70 hover:text-foreground hover:bg-white disabled:opacity-60 transition-colors"
+          >
+            <MoreVertical className="w-4 h-4" />
+          </button>
+          {menuOpen && (
+            <div
+              role="menu"
+              className="absolute top-9 start-0 min-w-[10.5rem] rounded-xl border bg-card card-shadow-hover p-1"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onDelete(order);
+                }}
+                className="flex items-center gap-2 w-full text-start px-2.5 py-2 rounded-lg text-sm font-medium text-[hsl(var(--status-overdue))] hover:bg-[hsl(var(--status-overdue-bg))] transition-colors"
+              >
+                <Trash2 className="w-4 h-4" /> Delete order
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {canComplete && (
         <button
@@ -121,7 +177,7 @@ export default function OrderCard({ order, refundCount = 0, onMarkDelivered, bus
           <RouteProgress order={order} />
           <div className="flex items-center justify-between gap-2 mt-2 font-mono text-[10.5px] font-semibold uppercase tracking-[0.12em]">
             <p className={overdue ? 'text-[hsl(var(--status-overdue))]' : 'text-muted-foreground'}>
-              {eta ?? 'delivered'}
+              {eta ?? deliveredLine}
             </p>
             {order.order_number && (
               <p className="text-muted-foreground/70 truncate max-w-[45%]" title={`Order ${order.order_number}`}>

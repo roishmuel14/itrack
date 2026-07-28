@@ -11,9 +11,11 @@ import { GMAIL_CONNECT_ENABLED } from '@/lib/config';
 import { Button } from '@/components/ui/button';
 import Barcode from '@/components/Barcode';
 import ManualAddDialog from '@/components/ManualAddDialog';
+import ConfirmDialog from '@/components/ConfirmDialog';
+import DeliveredDialog from '@/components/DeliveredDialog';
 import OrderCard from '@/components/OrderCard';
 import ActivityFeed from '@/components/ActivityFeed';
-import { daysUntil, formatMoney } from '@/lib/format';
+import { daysUntil, formatDate, formatMoney } from '@/lib/format';
 
 const ACTIVE_STATUSES = ['ordered', 'shipped', 'in_transit', 'out_for_delivery', 'delayed'];
 const FILTERS = [
@@ -71,6 +73,8 @@ export default function Dashboard() {
   const [showDelivered, setShowDelivered] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [completingId, setCompletingId] = useState(null);
+  const [deliveringOrder, setDeliveringOrder] = useState(null);
+  const [deletingOrder, setDeletingOrder] = useState(null);
   const reloadTimer = useRef(null);
 
   const load = useCallback(async (silent = false) => {
@@ -99,18 +103,44 @@ export default function Dashboard() {
   // Same server-side state authority as the detail page: the function owns the
   // transition, we just reflect it. Realtime also refreshes the grid, but we
   // reload so the card moves the moment the call returns.
-  const markDelivered = useCallback(async (order) => {
+  const confirmDelivered = useCallback(async (deliveredAt) => {
+    const order = deliveringOrder;
+    if (!order) return;
     setCompletingId(order.id);
     try {
-      await invokeFunction('orders/setStatus', { order_id: order.id, action: 'mark_delivered' });
-      toast.success('Marked delivered', 'Nice, another one home.');
+      await invokeFunction('orders/setStatus', {
+        order_id: order.id,
+        action: 'mark_delivered',
+        delivered_at: deliveredAt,
+      });
+      setDeliveringOrder(null);
+      toast.success('Marked delivered', `Arrived ${formatDate(deliveredAt)}. Nice, another one home.`);
       await load(true);
     } catch (err) {
       toast.notifyError(err, 'Cannot update order');
     } finally {
       setCompletingId(null);
     }
-  }, [load, toast]);
+  }, [deliveringOrder, load, toast]);
+
+  const confirmDelete = useCallback(async () => {
+    const order = deletingOrder;
+    if (!order) return;
+    setCompletingId(order.id);
+    try {
+      await invokeFunction('orders/setStatus', { order_id: order.id, action: 'delete' });
+      setDeletingOrder(null);
+      // Drop it locally first: the row is gone server-side, so waiting on the
+      // reload would leave a card the user just deleted on screen.
+      setOrders((prev) => (prev ?? []).filter((o) => o.id !== order.id));
+      toast.success('Order deleted', `The ${order.merchant_name} order and its history are gone.`);
+      await load(true);
+    } catch (err) {
+      toast.notifyError(err, 'Cannot delete order');
+    } finally {
+      setCompletingId(null);
+    }
+  }, [deletingOrder, load, toast]);
 
   useEffect(() => {
     load();
@@ -396,7 +426,8 @@ export default function Dashboard() {
                   key={o.id}
                   order={o}
                   refundCount={refundsByOrder[o.id] ?? 0}
-                  onMarkDelivered={markDelivered}
+                  onMarkDelivered={setDeliveringOrder}
+                  onDelete={setDeletingOrder}
                   busy={completingId === o.id}
                 />
               ))}
@@ -419,7 +450,7 @@ export default function Dashboard() {
               {showDelivered && (
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 mt-4">
                   {delivered.map((o) => (
-                    <OrderCard key={o.id} order={o} />
+                    <OrderCard key={o.id} order={o} onDelete={setDeletingOrder} busy={completingId === o.id} />
                   ))}
                 </div>
               )}
@@ -431,6 +462,22 @@ export default function Dashboard() {
         </aside>
       </div>
       <ManualAddDialog open={addOpen} onClose={() => setAddOpen(false)} onAdded={() => load()} />
+      <DeliveredDialog
+        open={Boolean(deliveringOrder)}
+        order={deliveringOrder}
+        busy={completingId === deliveringOrder?.id}
+        onConfirm={confirmDelivered}
+        onClose={() => setDeliveringOrder(null)}
+      />
+      <ConfirmDialog
+        open={Boolean(deletingOrder)}
+        title="Delete this order?"
+        body={`The ${deletingOrder?.merchant_name ?? ''} order, its shipments, timeline, and refund alerts are removed for good. Syncing your inbox again will not bring it back.`}
+        confirmLabel="Delete order"
+        busy={completingId === deletingOrder?.id}
+        onConfirm={confirmDelete}
+        onClose={() => setDeletingOrder(null)}
+      />
     </>
   );
 }
