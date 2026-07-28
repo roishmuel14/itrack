@@ -6,6 +6,32 @@ bugs. On submission day this file becomes the answers to the three required ques
 
 ## What worked well
 
+- 2026-07-27: **Agent entity tools inherit RLS correctly, and that is the single best thing we
+  tested all build.** Our whole assistant feature rested on an unproven assumption: that an agent
+  reading `Order`/`Shipment`/`TrackingEvent` on behalf of a signed-in user cannot see other users'
+  rows. Verified from a second, NON-admin account (`scripts/agent-leak-test.mjs`): the agent issued
+  `read_Order` with an UNFILTERED `{"query": {}}` and got back exactly ONE row, its own, while the
+  other account owned 11. User-scoped agent memory held too: account B's "what do you remember about
+  me?" came back empty minutes after account A saved a memory. Zero app code was needed to get this
+  right, which is exactly how it should be, and it is worth documenting explicitly because right now
+  a developer has no way to know it without testing it themselves.
+
+- 2026-07-27: **WhatsApp needed zero backend work and the round trip worked first try.** From an
+  agent that already existed, the entire cost of a second channel was one `whatsapp_greeting` line
+  in the agent jsonc and a link built by `getWhatsAppConnectURL()`. On a real phone: send the
+  prefilled activation message, get the greeting back, ask "where's my Mikasa ball?", and the same
+  tool-backed answer arrives as in the web chat, correctly scoped to that account's own orders. No
+  webhook, no number provisioning, no message-template approval, no session-window handling. Having
+  built a WhatsApp integration the normal way before, this is the single largest effort gap between
+  Base44 and doing it yourself that we hit in this build.
+
+- 2026-07-27: **Nested function-tool names resolve.** `{ "function_name": "orders/manualAdd" }` in
+  an agent's `tool_configs` works with the slash intact: the tool call comes back named exactly
+  `orders/manualAdd` with `status: "success"`. Our 4xx error contract also survives the trip: a
+  function returning `{ error, reasons: [{code: "tracking_invalid", message: "That tracking number
+  looks too short"}] }` reached the user as "the tracking number 'AB1' is too short to be valid",
+  not a generic apology. Undocumented, worth documenting.
+
 - 2026-07-22: `base44 create --template backend-and-client` into a NON-empty directory just
   worked, kept our existing docs, and shipped an `.agents/skills/` folder with genuinely accurate
   CLI + SDK reference docs. Those bundled docs (entities.md, base44-agents.md, auth.md) were the
@@ -42,6 +68,25 @@ bugs. On submission day this file becomes the answers to the three required ques
   docs example, since naive "return an image URL" prompts look like they work and then 404.
 
 ## Where we got stuck / confused
+
+- 2026-07-27: **The WhatsApp "Connect" button is not what its name implies, and there is no visible
+  channel state anywhere.** We expected an enable/disable channel toggle (and had planned around a
+  rumoured "3 agents with WhatsApp per workspace" cap). What the green **Connect** button on
+  Agents -> agent -> WhatsApp actually does is open `api.whatsapp.com/send/` with a per-click
+  activation code, i.e. it is the exact same thing as the SDK's `getWhatsAppConnectURL()`: an
+  end-user deep link, not an admin action. Two consequences we had to discover by clicking: (a) the
+  channel appears to be live for every agent already, so there was nothing to "enable" and no cap
+  surfaced anywhere in the UI; (b) every click mints a NEW activation code against a DIFFERENT
+  pooled number (we saw three distinct US numbers in five minutes), which is alarming the first time
+  you see it because it reads like the previous link was invalidated. Asks: rename the button to
+  something like "Get connect link", show the channel's actual state and assigned number on the
+  agent card, and document the cap (or confirm there is none).
+
+- 2026-07-27: **`getTelegramConnectURL` exists in the SDK and a Telegram tab exists in the agent
+  config, but neither appears in the docs we could find.** It sits right next to
+  `getWhatsAppConnectURL` in `AgentsModule` with a full doc comment, so it is clearly intentional;
+  it just never shows up when you go looking for "what channels can my agent use". A one-line
+  channels overview in the agents docs would have saved us guessing.
 
 - 2026-07-26 (live, one occurrence, hypothesis): **a `functions deploy` may not serve the new
   bundle immediately.** We changed the Gmail search string inside `inbox/syncMyMail` (removed a
@@ -145,6 +190,21 @@ bugs. On submission day this file becomes the answers to the three required ques
   cannot iterate users and read their mailboxes, and `type: "connector"` automations fire only for
   shared connectors. Per-user webhook triggers (or a `getAppUserConnection(userId)`) would unlock
   a whole class of per-user sync products without polling.
+
+- 2026-07-27: **No `agents list` / `agents pull`, so a pushed agent config is unverifiable from the
+  CLI.** `agents push` is a full replace and prints only "Updated: <name>"; there is no way to read
+  back what the platform currently holds. We could only confirm our config had landed by opening the
+  dashboard and eyeballing the Welcome Message character count (123/500 matched our
+  `whatsapp_greeting` exactly). Ask: `base44 agents list` plus a `pull`/`diff` that writes the remote
+  config back as jsonc, the way `entities` and `functions` can be inspected.
+
+- 2026-07-27: **Agent tool results come back as PYTHON REPR strings, not JSON.** A tool call's
+  `results` field looks like `[{'merchant_name': 'Salomon', 'price': None, 'created_date':
+  datetime.datetime(2026, 7, 27, ...), 'is_sample': False}]`: single quotes, `None`, `False`, and
+  bare `datetime.datetime(...)` constructor calls. `JSON.parse` fails on every one, so anything
+  programmatic (tests, audit tooling, a UI that renders tool output) has to string-match. This leaks
+  the backend's Python implementation through a documented TypeScript-typed field
+  (`AgentMessageToolCall.results: string`). Ask: serialize tool results as JSON.
 
 ## Bugs (with repro)
 

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Version | 1.0 (2026-07-22) |
+| Version | 1.5 (2026-07-27); amendments v1.1-v1.5 follow the overview below |
 | Status | Approved for build |
 | Product | iTrack: a personal delivery command center |
 | Platform | Base44 developer platform (CLI), Vite + React frontend, Deno backend functions |
@@ -66,6 +66,21 @@ document wins.
 > restaurant AND supermarket/grocery orders are out (per-ruling: Wolt removed from the sync
 > sender query); store-pickup orders are in (physical goods awaiting collection). Verified on the
 > live app via full wipe + 60-day resync: 10 cards, all parcels; 14 drops, all correct.
+
+> **AMENDMENT v1.5 (2026-07-27): section 9 config drift, and the isolation gate is CLOSED.** Three
+> corrections to the section-9 listing, all forced by the platform rather than chosen: (a) the CLI
+> 0.1.5 agent schema accepts no `model` field, so model selection is the dashboard's "Automatic"
+> and the pinned `anthropic/claude-sonnet-4` line is gone; (b) a `memory_config` block was added
+> with `scope: "user"` and `include_other_conversation_context: false`, since agent memory is
+> otherwise a second, non-obvious way for one user's data to reach another; (c) the instructions
+> grew an explicit "always query the tools before answering" preamble and a DD/MM/YYYY date rule,
+> because the terser v1.0 wording let the agent answer from conversation context alone.
+> **F7 AC2 is closed as a PASS:** agent entity tools DO inherit RLS, verified from a non-admin
+> second account, so the function-tools-only fallback was never needed and the four entity tools
+> stay. The WhatsApp paragraph below is also wrong about the enable step: there is no dashboard
+> toggle and no cap was ever surfaced (see FEEDBACK.md 2026-07-27); the channel is live for the
+> agent already, and the only app-side work is the `WHATSAPP_ENABLED` flag guarding the in-app
+> affordances so they cannot dead-end.
 
 ---
 
@@ -765,7 +780,7 @@ household boards, Hebrew/RTL localization, dark mode, native mobile, custom doma
 | 2 | `subscribe()` not respecting RLS | Stage 1 DoD two-account test; if leaky: poll instead of subscribe + FEEDBACK.md headline entry |
 | 3 | Plan gate: connectors need Builder+ | Roi confirms plan before stage 0 completes |
 | 4 | Gmail connector rejects readonly-only scope config | Accept full scope set; note in FEEDBACK.md |
-| 5 | Agent entity tools not user-scoped | F7.2 gate; fallback: function-tools-only agent |
-| 6 | WhatsApp 3-agent limit already consumed | Roi checks dashboard; fallback: in-app agent only, WhatsApp in video via one freed slot |
+| 5 | Agent entity tools not user-scoped | **CLOSED 2026-07-27, PASS.** `scripts/agent-leak-test.mjs` exit 0 as non-admin B: unfiltered `read_Order` returned only B's row, memory stayed user-scoped. Fallback never needed |
+| 6 | WhatsApp 3-agent limit already consumed | **CLOSED 2026-07-27, moot.** No cap surfaced anywhere in the UI and there is no channel toggle to consume; the dashboard "Connect" button is an end-user deep link, not an admin action (FEEDBACK.md). Residual risk handled by the `WHATSAPP_ENABLED` flag |
 | 7 | `has_new_messages` condition or payload shape differs in practice | Stage 2 spike logs the raw payload first; sweep cron guarantees ingest regardless |
 | 8 | InvokeLLM schema compliance weak on messy emails | aiGateway fallback (section 8); confidence gating keeps bad parses visible, not silent |
