@@ -3,8 +3,11 @@
 // (born from a number-less shipping/delivery notice) into its full sibling.
 //
 // Self-contained on purpose: base44 exec reads the script from stdin and runs
-// it server-side with a global `base44`, so local imports cannot resolve.
-// The tiny status helpers below are inlined copies of mergeEngine.ts.
+// it server-side with a global `base44`, so local imports cannot resolve. The
+// status helpers below are inlined copies of base44/shared/mergeEngine.ts
+// (STATUS_RANK, EVENT_TYPE_TO_RANK, computeStatus, normalizeDomain,
+// normalizeOrderNumber) as of 2026-07-28. They can drift: re-diff them against
+// that file before trusting a later run.
 //
 // Run (from a checkout with base44/.app.jsonc, admin login):
 //   cat scripts/dedupe-orders.ts | base44 exec            # DRY_RUN report
@@ -77,7 +80,14 @@ const REFUND_STATUS_PRECEDENCE: Record<string, number> = {
 };
 const CHILD_ENTITIES = ["TrackingEvent", "EmailRecord", "Shipment", "RefundOpportunity"] as const;
 
-const orders = await base44.entities.Order.list("-created_date", 1000);
+const ORDER_LIMIT = 1000;
+const orders = await base44.entities.Order.list("-created_date", ORDER_LIMIT);
+if (orders.length === ORDER_LIMIT) {
+  console.log(
+    `WARNING: read exactly ${ORDER_LIMIT} orders, so the list may be truncated and some duplicate ` +
+      `pairs invisible. Raise ORDER_LIMIT and re-run before treating a clean report as complete.`,
+  );
+}
 const groups = new Map<string, any[]>();
 for (const o of orders) {
   const domain = normalizeDomain(o.merchant_domain);

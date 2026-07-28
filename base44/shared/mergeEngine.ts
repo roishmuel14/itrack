@@ -3,6 +3,7 @@
 // the only callers; no client ever sets a status directly.
 
 import { isCarrierDomain } from "./senderDomain.ts";
+import { carrierKeyFromName } from "./carriers.ts";
 
 export const ADVANCING_STATUSES = ["ordered", "shipped", "in_transit", "out_for_delivery", "delivered"] as const;
 export type AdvancingStatus = (typeof ADVANCING_STATUSES)[number];
@@ -202,9 +203,11 @@ export function decideMerge(
 
 // Orders within a date window that could be the incoming email's order, for
 // LLM "same order?" arbitration when hard keys fail (PRD F2). Returned BEST
-// FIRST (same-domain matches before wildcard matches, then by date proximity):
-// the pipeline arbitrates only the top few, so ordering decides which
-// candidates get a hearing.
+// FIRST (matching order number, then same domain, then date proximity): the
+// pipeline arbitrates only the top few, so ordering decides which candidates
+// get a hearing. Order number outranks proximity because it is far stronger
+// evidence; this path sees number matches whenever decideMerge's rungs could
+// not use them, e.g. short numbers below its 5-alphanumeric floor.
 //
 // Domain gate: same normalized domain matches; a missing or carrier domain on
 // EITHER side is a wildcard (carriers ship for everyone, so fedex.com never
@@ -233,6 +236,67 @@ export type FuzzyOrderCandidate = OrderLike & {
   created_date?: string;
 };
 
+// Identity repair for an email merging into an EXISTING order (PRD F2). A row
+// opened by a shipping/delivery notice carries weak identity: no ordered_at
+// (which also breaks the fuzzy window anchor and the card's progress bar), and
+// often the carrier's name and domain instead of the store's. A later, stronger
+// email must repair those, but must never downgrade good values:
+// - order_number / ordered_at: fill only when absent.
+// - merchant_domain: fill when absent, and upgrade a carrier domain to a real
+//   store domain; a real domain is never overwritten (it is half the merge key).
+// - merchant_name: an order confirmation is authoritative for a row that never
+//   saw one; otherwise replace only a carrier name with a non-carrier one.
+// Pure so the conditions are testable without the SDK; the caller adds the
+// non-identity fields (dates, totals, items, logo) around it.
+export interface IdentityFacts {
+  merchant_name?: string | null;
+  merchant_domain?: string | null;
+  order_number?: string | null;
+  classification?: string | null;
+}
+
+export interface IdentityOrder {
+  merchant_name?: string | null;
+  merchant_domain?: string | null;
+  order_number?: string | null;
+  ordered_at?: string | null;
+}
+
+export interface IdentityPatch {
+  order_number?: string;
+  merchant_domain?: string;
+  ordered_at?: string;
+  merchant_name?: string;
+}
+
+export function buildIdentityPatch(
+  order: IdentityOrder,
+  facts: IdentityFacts,
+  occurredAt: string,
+): IdentityPatch {
+  const patch: IdentityPatch = {};
+  if (!order.order_number && facts.order_number) patch.order_number = facts.order_number;
+  if (
+    facts.merchant_domain && !isCarrierDomain(facts.merchant_domain) &&
+    (!order.merchant_domain || isCarrierDomain(order.merchant_domain))
+  ) {
+    patch.merchant_domain = normalizeDomain(facts.merchant_domain);
+  }
+  const nameDiffers = !!facts.merchant_name && facts.merchant_name !== order.merchant_name;
+  if (!order.ordered_at && facts.classification === "order_confirmation") {
+    patch.ordered_at = occurredAt;
+    if (nameDiffers) patch.merchant_name = facts.merchant_name!;
+  }
+  if (
+    !patch.merchant_name && nameDiffers &&
+    carrierKeyFromName(order.merchant_name) !== null &&
+    carrierKeyFromName(facts.merchant_name) === null
+  ) {
+    patch.merchant_name = facts.merchant_name!;
+  }
+  return patch;
+}
+
 export function fuzzyCandidates(
   facts: FuzzyFacts,
   candidates: FuzzyOrderCandidate[],
@@ -243,7 +307,7 @@ export function fuzzyCandidates(
   if (!domain && !opts.widen) return [];
   const orderNo = normalizeOrderNumber(facts.order_number);
   const t = Date.parse(facts.occurredAt);
-  const scored: Array<{ id: string; sameDomain: boolean; distance: number }> = [];
+  const scored: Array<{ id: string; sameNumber: boolean; sameDomain: boolean; distance: number }> = [];
   for (const o of candidates) {
     const od = normalizeDomain(o.merchant_domain);
     const sameDomain = !!domain && !!od && od === domain;
@@ -254,8 +318,14 @@ export function fuzzyCandidates(
     const anchor = Date.parse(o.ordered_at ?? o.last_event_at ?? o.created_date ?? "");
     const distance = Number.isNaN(anchor) || Number.isNaN(t) ? Infinity : Math.abs(t - anchor);
     if (distance !== Infinity && distance > windowDays * 24 * 3600 * 1000) continue;
-    scored.push({ id: o.id, sameDomain, distance });
+    scored.push({ id: o.id, sameNumber: !!orderNo && candidateNo === orderNo, sameDomain, distance });
   }
-  scored.sort((a, b) => (a.sameDomain !== b.sameDomain ? (a.sameDomain ? -1 : 1) : a.distance - b.distance));
+  scored.sort((a, b) =>
+    a.sameNumber !== b.sameNumber
+      ? (a.sameNumber ? -1 : 1)
+      : a.sameDomain !== b.sameDomain
+      ? (a.sameDomain ? -1 : 1)
+      : a.distance - b.distance
+  );
   return scored.map((s) => s.id);
 }

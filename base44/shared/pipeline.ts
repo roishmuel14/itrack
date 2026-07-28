@@ -21,6 +21,7 @@ import {
   isTrackablePurchase,
 } from "./extract.ts";
 import {
+  buildIdentityPatch,
   computeStatus,
   decideMerge,
   EVENT_TYPE_TO_RANK,
@@ -28,7 +29,7 @@ import {
   normalizeDomain,
   type StatusSignal,
 } from "./mergeEngine.ts";
-import { carrierKeyFromName, resolveCarrier } from "./carriers.ts";
+import { resolveCarrier } from "./carriers.ts";
 import { rehostImageMeasured } from "./rehost.ts";
 import { resolveAndRehostLogo } from "./merchantLogo.ts";
 import { domainFromSender, isCarrierDomain } from "./senderDomain.ts";
@@ -40,6 +41,10 @@ type Base44Client = any;
 const SNIPPET_MAX = 1990;
 const MAX_REHOSTED_IMAGES = 3;
 const LOW_CONFIDENCE = 0.6;
+// Arbitration budget per email (each is one InvokeLLM call inside a loop that
+// already spends one on extraction).
+const MAX_ARBITRATIONS = 3;
+const MAX_CROSS_MERCHANT_ARBITRATIONS = 1;
 
 interface OrderItem {
   name?: string;
@@ -138,7 +143,7 @@ export interface RunCache {
 // Cache rows are this run's own writes (kept current via mirroring after each
 // Order.update), strictly fresher than a possibly-lagging DB read, so on an id
 // collision the cache row wins.
-function unionById<T extends { id: string }>(dbRows: T[], cacheRows: T[] = []): T[] {
+export function unionById<T extends { id: string }>(dbRows: T[], cacheRows: T[] = []): T[] {
   if (cacheRows.length === 0) return dbRows;
   const cacheById = new Map(cacheRows.map((r) => [r.id, r]));
   const dbIds = new Set(dbRows.map((r) => r.id));
@@ -386,14 +391,20 @@ export async function runCorePipeline(
     );
 
     if (decision.kind === "ambiguous") {
-      // LLM arbitration against the best candidates (max 3 calls; the list
-      // arrives best-first from fuzzyCandidates). Same-merchant comparisons
-      // lean toward merging; wildcard (carrier/domainless) comparisons demand
+      // LLM arbitration against the best candidates (the list arrives
+      // best-first from fuzzyCandidates). Same-merchant comparisons lean
+      // toward merging; wildcard (carrier/domainless) comparisons demand
       // positive linking evidence. See buildArbitrationPrompt.
+      //
+      // Budgets: each call is an InvokeLLM round trip inside a per-message
+      // loop, so they are capped. Cross-merchant calls get the tighter budget
+      // because widening can nominate every in-window order and those
+      // comparisons almost never match.
       let matched: string | null = null;
+      let crossMerchantCalls = 0;
       const incomingSummary = incomingSummaryFor(extraction, input, occurredAt, snippet);
       const incomingDomain = normalizeDomain(extraction.merchant_domain);
-      for (const candidateId of decision.candidateOrderIds.slice(0, 3)) {
+      for (const candidateId of decision.candidateOrderIds.slice(0, MAX_ARBITRATIONS)) {
         // deno-lint-ignore no-explicit-any
         const candidate: any = myOrders.find((o: any) => o.id === candidateId);
         if (!candidate) continue;
@@ -401,6 +412,8 @@ export async function runCorePipeline(
         const crossMerchant = !incomingDomain || !candidateDomain ||
           incomingDomain !== candidateDomain ||
           isCarrierDomain(incomingDomain) || isCarrierDomain(candidateDomain);
+        if (crossMerchant && crossMerchantCalls >= MAX_CROSS_MERCHANT_ARBITRATIONS) continue;
+        if (crossMerchant) crossMerchantCalls++;
         const same = await arbitrateSameOrder(base44, {
           incoming: incomingSummary,
           existing: candidateSummaryFor(candidate, myShipments),
@@ -408,6 +421,15 @@ export async function runCorePipeline(
         });
         if (same) {
           matched = candidateId;
+          // Cross-merchant merges rest on the LLM alone (no hard key agreed),
+          // so they are logged: this is the line to grep when an over-merge is
+          // suspected on the live app.
+          if (crossMerchant) {
+            console.log(
+              `arbitration cross-merchant merge: msg=${input.gmailMessageId} order=${candidateId} ` +
+                `incoming_domain=${incomingDomain || "none"} candidate_domain=${candidateDomain || "none"}`,
+            );
+          }
           break;
         }
       }
@@ -460,36 +482,17 @@ export async function runCorePipeline(
       orderId = decision.orderId;
       // deno-lint-ignore no-explicit-any
       const order: any = myOrders.find((o: any) => o.id === orderId)!;
-      // Fill gaps; never blank existing values with nulls.
-      const patch: Record<string, unknown> = {};
-      if (!order.order_number && extraction.order_number) patch.order_number = extraction.order_number;
-      // merchant_domain is half the merge key: fill it only with a real store
-      // domain, and upgrade a carrier domain (a row born from a carrier notice)
-      // to the store's domain once a merchant email merges in.
-      if (
-        extraction.merchant_domain && !isCarrierDomain(extraction.merchant_domain) &&
-        (!order.merchant_domain || isCarrierDomain(order.merchant_domain))
-      ) {
-        patch.merchant_domain = normalizeDomain(extraction.merchant_domain);
-      }
-      // Repair identity written by a weaker email. A row created from a
-      // shipping/delivery notice has no ordered_at (which also breaks the
-      // fuzzy window anchor and the progress bar) and may carry the carrier's
-      // name as the merchant; the order confirmation is authoritative for both.
-      if (!order.ordered_at && extraction.classification === "order_confirmation") {
-        patch.ordered_at = occurredAt;
-        if (extraction.merchant_name && extraction.merchant_name !== order.merchant_name) {
-          patch.merchant_name = extraction.merchant_name;
-        }
-      }
-      if (
-        !patch.merchant_name && extraction.merchant_name &&
-        extraction.merchant_name !== order.merchant_name &&
-        carrierKeyFromName(order.merchant_name) !== null &&
-        carrierKeyFromName(extraction.merchant_name) === null
-      ) {
-        patch.merchant_name = extraction.merchant_name;
-      }
+      // Fill gaps; never blank existing values with nulls. Identity fields
+      // (order number, domain, ordered_at, merchant name) follow the repair
+      // rules in buildIdentityPatch; everything below is simple gap-filling.
+      const patch: Record<string, unknown> = {
+        ...buildIdentityPatch(order, {
+          merchant_name: extraction.merchant_name,
+          merchant_domain: extraction.merchant_domain,
+          order_number: extraction.order_number,
+          classification: extraction.classification,
+        }, occurredAt),
+      };
       if (extraction.promised_date) patch.promised_date = extraction.promised_date;
       if (extraction.eta_date) patch.eta_date = extraction.eta_date;
       if (order.total == null && extraction.total != null) patch.total = extraction.total;
@@ -519,9 +522,13 @@ export async function runCorePipeline(
       if (Object.keys(patch).length > 0) {
         await service.Order.update(orderId, patch);
         // Keep the run cache current so later emails in this run see the
-        // patched identity despite entity read-after-write lag.
+        // patched identity despite entity read-after-write lag. Orders that
+        // existed BEFORE this run are not in the cache yet, so they are added
+        // here: without this, a second email in the same run re-reads the
+        // stale pre-patch row and can fail to match it.
         const cachedOrder = runCache?.orders.find((o) => o.id === orderId);
         if (cachedOrder) Object.assign(cachedOrder, patch);
+        else runCache?.orders.push({ ...order, ...patch, id: orderId });
       }
     } else {
       const domain = normalizeDomain(extraction.merchant_domain) || undefined;
@@ -652,16 +659,21 @@ export async function runCorePipeline(
     // an existing order later must not rewind it. ISO UTC strings compare
     // lexicographically.
     // deno-lint-ignore no-explicit-any
-    const prevLast = (myOrders.find((o: any) => o.id === orderId) as any)?.last_event_at as
-      | string
-      | undefined;
+    const priorOrder: any = myOrders.find((o: any) => o.id === orderId);
+    const prevLast: string | undefined = priorOrder?.last_event_at;
     const lastEventAt = prevLast && prevLast > occurredAt ? prevLast : occurredAt;
     await service.Order.update(orderId, {
       status: newStatus,
       last_event_at: lastEventAt,
     });
+    // Invariant: after an email is processed, its order is in the run cache
+    // with current values, so the next email of this run never re-reads a
+    // stale row through read-after-write lag.
     const cacheRow = runCache?.orders.find((o) => o.id === orderId);
     if (cacheRow) Object.assign(cacheRow, { status: newStatus, last_event_at: lastEventAt });
+    else if (priorOrder) {
+      runCache?.orders.push({ ...priorOrder, id: orderId, status: newStatus, last_event_at: lastEventAt });
+    }
     if (shipmentId) {
       const shipmentEvents = allEvents.filter((e: any) => e.shipment_id === shipmentId);
       const shipmentStatus = computeStatus([

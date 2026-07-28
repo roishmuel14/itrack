@@ -26,7 +26,11 @@ export default function ManualAddDialog({ open, onClose, onAdded }) {
         ? { email_text: emailText }
         : { tracking_number: tracking.trim(), merchant_name: merchant.trim() };
       const res = await invokeFunction('orders/manualAdd', payload);
-      toast.success('Order added', 'Your package is now being tracked.');
+      if (res?.already_exists) {
+        toast.success('Already tracked', 'That tracking number is on an order you already have.');
+      } else {
+        toast.success('Order added', 'Your package is now being tracked.');
+      }
       setEmailText('');
       setTracking('');
       setMerchant('');
