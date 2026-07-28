@@ -19,6 +19,7 @@ const WHATSAPP_ICON = (
 // The bubble keeps whitespace-pre-line, so line breaks take care of themselves.
 function renderMarkdownish(text) {
   const withBullets = text
+    .replace(/^[ \t]*-{3,}[ \t]*$/gm, '')
     .replace(/^[ \t]*#{1,6}[ \t]+(.*)$/gm, '**$1**')
     .replace(/^[ \t]*-[ \t]+/gm, '• ');
   const parts = [];
