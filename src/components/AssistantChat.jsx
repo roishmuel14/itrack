@@ -11,13 +11,16 @@ const WHATSAPP_ICON = (
   </svg>
 );
 
-// The agent answers in light markdown: **bold** labels and "- " bullets. Those
-// two are the only markers it actually emits, and unrendered they show up as
-// literal asterisks in the bubble, so they are handled inline rather than by
-// pulling in a markdown dependency. The bubble keeps whitespace-pre-line, so
-// line breaks still take care of themselves.
+// The agent answers in light markdown: **bold** labels, "- " bullets, and the
+// occasional "### " heading. Those are the only markers it actually emits, and
+// unrendered they show up as literal asterisks and hashes in the bubble, so
+// they are handled inline rather than by pulling in a markdown dependency.
+// Headings collapse to bold, which is the right weight inside a chat bubble.
+// The bubble keeps whitespace-pre-line, so line breaks take care of themselves.
 function renderMarkdownish(text) {
-  const withBullets = text.replace(/^[ \t]*-[ \t]+/gm, '• ');
+  const withBullets = text
+    .replace(/^[ \t]*#{1,6}[ \t]+(.*)$/gm, '**$1**')
+    .replace(/^[ \t]*-[ \t]+/gm, '• ');
   const parts = [];
   let last = 0;
   for (const match of withBullets.matchAll(/\*\*(.+?)\*\*/g)) {
